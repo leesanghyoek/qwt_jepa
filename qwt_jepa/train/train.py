@@ -1,0 +1,178 @@
+"""Entrypoint train (Phase F - Buoc F3).
+
+    python -m qwt_jepa.train.train --config qwt_jepa/configs/base.yaml
+
+Truoc do chay 1 lan:
+    python -m qwt_jepa.scripts.compute_norm_stats --config qwt_jepa/configs/base.yaml
+"""
+
+from __future__ import annotations
+
+import argparse
+import math
+import pathlib
+import sys
+
+import torch
+import yaml
+from torch.utils.data import DataLoader
+
+_ROOT = pathlib.Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from qwt_jepa.data.dataset import PairedNoisyCleanDataset, jepa_collate   # noqa: E402
+from qwt_jepa.data.normalize import ImuNormalizer                        # noqa: E402
+from qwt_jepa.models.jepa import QwtJepa                                  # noqa: E402
+from qwt_jepa.train.engine import evaluate, train_one_epoch              # noqa: E402
+
+
+def build_loaders(cfg: dict, normalizer: ImuNormalizer):
+    tcfg = cfg["train"]
+    root = cfg["data"]["root"]
+    man = cfg["data"]["manifest"]
+
+    train_ds = PairedNoisyCleanDataset(man["train"], root, cfg, "train", normalizer)
+    val_ds = PairedNoisyCleanDataset(man["valid"], root, cfg, "valid", normalizer)
+
+    common = dict(
+        num_workers=int(tcfg.get("num_workers", 4)),
+        pin_memory=True,
+        collate_fn=jepa_collate,
+        persistent_workers=int(tcfg.get("num_workers", 4)) > 0,
+    )
+    train_loader = DataLoader(
+        train_ds, batch_size=int(tcfg["batch_size"]), shuffle=True, drop_last=True, **common
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=int(tcfg["batch_size"]), shuffle=False, drop_last=False, **common
+    )
+    return train_ds, train_loader, val_loader
+
+
+def build_scheduler(optimizer, cfg: dict, total_steps: int):
+    warmup = int(cfg["train"]["optimizer"].get("warmup_steps", 0))
+
+    def lr_lambda(step: int) -> float:
+        if warmup > 0 and step < warmup:
+            return step / max(1, warmup)
+        prog = (step - warmup) / max(1, total_steps - warmup)
+        return 0.5 * (1.0 + math.cos(math.pi * min(1.0, prog)))
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", default=str(_ROOT / "qwt_jepa" / "configs" / "base.yaml"))
+    ap.add_argument("--out", default=str(_ROOT / "qwt_jepa" / "runs" / "base"))
+    ap.add_argument("--resume", default="")
+    ap.add_argument("--epochs", type=int, default=0, help="ghi de train.epochs (0 = dung config)")
+    ap.add_argument("--batch-size", type=int, default=0, help="ghi de train.batch_size")
+    ap.add_argument("--num-workers", type=int, default=-1, help="ghi de train.num_workers")
+    ap.add_argument("--encoder-depth", type=int, default=0, help="ghi de model.encoder.depth")
+    ap.add_argument("--limit-train-batches", type=int, default=0, help="debug: cat ngan 1 epoch")
+    args = ap.parse_args()
+
+    cfg = yaml.safe_load(pathlib.Path(args.config).read_text())
+    if args.epochs:
+        cfg["train"]["epochs"] = args.epochs
+    if args.batch_size:
+        cfg["train"]["batch_size"] = args.batch_size
+    if args.num_workers >= 0:
+        cfg["train"]["num_workers"] = args.num_workers
+    if args.encoder_depth:
+        cfg["model"]["encoder"]["depth"] = args.encoder_depth
+    out_dir = pathlib.Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.manual_seed(0)
+
+    norm_path = pathlib.Path(cfg["data"]["norm_stats"])
+    if norm_path.exists():
+        normalizer = ImuNormalizer.from_yaml(norm_path)
+        print(f"norm stats: {norm_path}")
+    else:
+        normalizer = ImuNormalizer.identity()
+        print(f"[canh bao] chua co {norm_path} -> dung identity. "
+              f"Chay compute_norm_stats truoc.")
+
+    train_ds, train_loader, val_loader = build_loaders(cfg, normalizer)
+    print(f"train {len(train_ds)} sample | {len(train_loader)} batch/epoch | device {device}")
+
+    model = QwtJepa(cfg).to(device)
+    n_par = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"QwtJepa: {n_par/1e6:.2f}M params train | N tokens {model.layout.n_tokens}")
+
+    ocfg = cfg["train"]["optimizer"]
+    optimizer = torch.optim.AdamW(
+        (p for p in model.parameters() if p.requires_grad),
+        lr=float(ocfg["lr"]),
+        weight_decay=float(ocfg["weight_decay"]),
+        betas=(0.9, 0.95),
+    )
+
+    steps_per_epoch = args.limit_train_batches or len(train_loader)
+    total_steps = cfg["train"]["epochs"] * steps_per_epoch
+    scheduler = build_scheduler(optimizer, cfg, total_steps)
+
+    start_epoch, step, best = 0, 0, math.inf
+    if args.resume and pathlib.Path(args.resume).exists():
+        ck = torch.load(args.resume, map_location=device)
+        model.load_state_dict(ck["model"])
+        optimizer.load_state_dict(ck["optimizer"])
+        scheduler.load_state_dict(ck["scheduler"])
+        start_epoch, step, best = ck["epoch"] + 1, ck["step"], ck.get("best", math.inf)
+        print(f"resume tu {args.resume}: epoch {start_epoch}, step {step}")
+
+    for epoch in range(start_epoch, cfg["train"]["epochs"]):
+        train_ds.set_epoch(epoch)
+        loader = train_loader
+        if args.limit_train_batches:
+            from itertools import islice
+
+            class _Cut:
+                batch_size = train_loader.batch_size
+
+                def __iter__(self_):
+                    return islice(iter(train_loader), args.limit_train_batches)
+
+                def __len__(self_):
+                    return args.limit_train_batches
+
+            loader = _Cut()
+
+        step = train_one_epoch(
+            model, loader, optimizer, scheduler, cfg, device, step, total_steps, epoch
+        )
+        metrics = evaluate(model, val_loader, cfg, device)
+        print(
+            f"[eval e{epoch}] L_jepa {metrics['L_jepa']:.4f} | PSNR {metrics['psnr']:.2f} dB | "
+            f"RMSE acc {metrics['rmse_acc']:.4f} gyro {metrics['rmse_gyro']:.4f}",
+            flush=True,
+        )
+
+        ckpt = {
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "epoch": epoch,
+            "step": step,
+            "best": best,
+            "cfg": cfg,
+            "norm_stats": normalizer.to_dict(),
+            "val_metrics": metrics,
+        }
+        torch.save(ckpt, out_dir / "last.pt")
+        if metrics["L_jepa"] < best and (epoch + 1) % int(cfg["train"].get("ckpt_every", 1)) == 0:
+            best = metrics["L_jepa"]
+            ckpt["best"] = best
+            torch.save(ckpt, out_dir / "best.pt")
+            print(f"  -> best.pt (val L_jepa {best:.4f})")
+
+    print("xong.")
+
+
+if __name__ == "__main__":
+    main()
