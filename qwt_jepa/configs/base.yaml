@@ -52,7 +52,7 @@ masking:
 
 train:
   epochs: 100
-  batch_size: 64
+  batch_size: 8
   num_workers: 4
   optimizer: {name: adamw, lr: 1.5e-4, weight_decay: 0.05, warmup_steps: 2000}
   ema: {start: 0.996, end: 1.0}

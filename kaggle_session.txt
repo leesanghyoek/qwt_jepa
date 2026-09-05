@@ -1,0 +1,250 @@
+================================================================================
+ KAGGLE SESSION - huan luyen qwt_jepa tren Kaggle (khong upload data tu local)
+================================================================================
+
+Y tuong: 3 notebook tach biet
+  A. prepare-data  -> tai TartanAir-v2 (7 env) thang tren Kaggle, resize 256,
+                      kem manifest + norm_stats  -> Save Version -> thanh Dataset
+  B. train         -> clone code tu GitHub, add output cua A lam input, chay train
+  C. (lap lai B voi --resume moi phien 12h cho den khi du 100 epoch)
+
+Data can: 14 environment (7 goc + 7 moi de tang da dang canh, xem muc 0)
+          difficulty = easy + hard   |   camera = lcam_front   |   modality = image + imu
+          Tong raw ~46GB -> resize 256 con ~13GB (nam gon trong 1 notebook, gioi han
+          commit /kaggle/working cua Kaggle la 20GB). Manifest duoc SINH TRUC TIEP
+          tren Kaggle bang qwt_jepa/scripts/build_manifests.py (xem Cell A4), khong
+          can tai/tao dataset manifest rieng nua.
+
+QUAN TRONG ve quy mo: model nay (d_model=384, encoder depth 12) chay tren Kaggle free
+GPU (~30h/tuan, 12h/phien). Thoi gian/epoch ti le thuan voi so sample, nen KHONG nen
+tang du lieu vo han - tang gap doi da du de da dang moi truong ma khong lam epoch time
+tang qua nhieu (7 env goc: ~5-8 phut/epoch -> 14 env: uoc ~10-16 phut/epoch).
+
+
+================================================================================
+ 0. DANH SACH 14 ENVIRONMENT  (7 goc + 7 moi, raw GB = image_lcam_front + imu, easy+hard)
+================================================================================
+# ta.download() KHONG loc duoc theo trajectory - luon tai het moi trajectory cua
+# environment/difficulty/modality/camera da chon. Nen "chon trajectory" chi anh
+# huong toi luc build manifest (qwt_jepa/scripts/build_manifests.py), khong anh
+# huong toi luc tai.
+
+7 environment goc (da co manifest/norm_stats co dinh - xem build_manifests.py):
+  AmericanDiner (2.2GB)  ArchVizTinyHouseDay (0.8GB)  CountryHouse (1.9GB)
+  DesertGasStation (2.3GB)  OldTownNight (1.7GB)  RetroOffice (1.0GB)
+  WaterMillDay (10.0GB)                                    -> cong ~20GB
+
+7 environment moi them (holdout val/test tu dong chon boi build_manifests.py):
+  HongKong (2.4GB)  OldTownSummer (2.5GB)  House (3.0GB)  CoalMine (3.5GB)
+  Office (4.5GB)  HQWesternSaloon (4.6GB)  VictorianStreet (5.5GB)
+                                                            -> cong ~26GB
+
+Tong raw ~46GB -> sau resize 256 con ~13GB.
+
+
+================================================================================
+ 1. DAY CODE LEN GITHUB  (chay 1 lan tren may local)
+================================================================================
+# tu /home/buidinhkhoi/Thuctap  (repo goc, branch main, package nam o qwt_jepa/)
+cd /home/buidinhkhoi/Thuctap
+
+# .gitignore da co - kiem tra co cac dong: __pycache__/  *.pt  qwt_jepa/runs/
+git add qwt_jepa .gitignore kaggle_session.txt
+git commit -m "qwt_jepa + kaggle session"
+
+# remote da co san (kiem tra: git remote -v):
+#   origin  git@github.com:leesanghyoek/qwt_jepa.git
+git push -u origin main
+
+# => trong notebook Kaggle se: !git clone https://github.com/leesanghyoek/qwt_jepa.git
+#    duong dan package: /kaggle/working/qwt_jepa/qwt_jepa/...
+#    file norm_stats co san: qwt_jepa/qwt_jepa/configs/norm_stats.yaml
+
+
+================================================================================
+ NOTEBOOK A : "qwt-prepare-data"
+   Settings: Internet = ON (verify phone 1 lan) | Accelerator = None | Persistence = Files
+   Khong can Add data gi them - Cell A4 tu clone code va tu sinh manifest/norm_stats.
+================================================================================
+
+# ---- Cell A1 : cai package + lay code (can build_manifests.py, compute_norm_stats.py) ----
+!pip install -q tartanair
+!git clone -q https://github.com/leesanghyoek/qwt_jepa.git /kaggle/working/_code
+
+# ---- Cell A2+A3 gop lam 1 : tai TUNG environment -> resize ngay -> xoa raw ----------------
+# Xu ly tuan tu tung env (khong tai het 14 env roi moi resize) de dinh dam bao khong
+# bao gio giu qua nhieu raw cung luc tren dia session Kaggle (~73GB tong).
+import glob, pathlib, shutil
+from PIL import Image
+from concurrent.futures import ThreadPoolExecutor
+import tartanair as ta
+
+RAW = "/kaggle/working/_raw"
+DST = pathlib.Path("/kaggle/working/tartanair-v2")   # <- data_root cho train
+ta.init(tartanair_data_root=RAW)
+
+ENVS = [
+    # 7 environment goc
+    "AmericanDiner", "ArchVizTinyHouseDay", "CountryHouse", "DesertGasStation",
+    "OldTownNight", "RetroOffice", "WaterMillDay",
+    # 7 environment moi them de tang da dang canh (~26GB raw)
+    "HongKong", "OldTownSummer", "House", "CoalMine", "Office",
+    "HQWesternSaloon", "VictorianStreet",
+]
+
+def conv(p, src):
+    p = pathlib.Path(p)
+    if not p.is_file():
+        return
+    rel = p.relative_to(src)
+    out = DST / rel
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if p.suffix.lower() == ".png":
+        with Image.open(p) as im:
+            im.convert("RGB").resize((256, 256), Image.BILINEAR).save(out)
+    else:  # acc.txt / gyro.txt / imu_time.txt / pose*.txt
+        shutil.copy2(p, out)
+
+for env in ENVS:
+    ta.download(
+        env=[env],
+        difficulty=["easy", "hard"],
+        modality=["image", "imu"],
+        camera_name=["lcam_front"],
+        unzip=True,
+    )
+    src = pathlib.Path(RAW)
+    files = glob.glob(str(src / "**" / "*"), recursive=True)
+    with ThreadPoolExecutor(8) as ex:
+        list(ex.map(lambda p: conv(p, src), files))
+    shutil.rmtree(RAW, ignore_errors=True)   # xoa raw cua env nay truoc khi sang env ke tiep
+    print("done", env, flush=True)
+
+print("resize xong ->", DST)
+!du -sh /kaggle/working/tartanair-v2
+
+# ---- Cell A4 : sinh manifest + norm_stats TRUC TIEP tren Kaggle -------------------------
+# Khong can tai/upload dataset manifest rieng nua - build_manifests.py chay thang
+# tren du lieu vua resize, tu dong chon holdout val/test cho 7 env moi (xem docstring
+# trong script). 7 env goc van dung dung holdout cu (hard-code trong script).
+!python /kaggle/working/_code/qwt_jepa/scripts/build_manifests.py \
+    --data-root /kaggle/working/tartanair-v2 \
+    --output-dir /kaggle/working/tartanair-v2-jepa/_splits
+
+import pathlib, shutil
+JEPA = pathlib.Path("/kaggle/working/tartanair-v2-jepa")
+for split, fname in [("train", "train.csv"), ("valid", "val.csv"), ("test", "test.csv")]:
+    out = JEPA / split
+    out.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(JEPA / "_splits" / fname, out / "manifest.csv")
+
+# Tinh lai norm_stats vi train set gio gom them 7 env moi (khong dung norm_stats cu nua):
+kaggle_cfg = f"""
+data:
+  root: {DST}
+  manifest: {{train: {JEPA}/train/manifest.csv, valid: {JEPA}/valid/manifest.csv, test: {JEPA}/test/manifest.csv}}
+  imu: {{window_size: 128}}
+  norm_stats: /kaggle/working/norm_stats.yaml
+"""
+pathlib.Path("/kaggle/working/norm_stats_cfg.yaml").write_text(kaggle_cfg)
+!python /kaggle/working/_code/qwt_jepa/scripts/compute_norm_stats.py --config /kaggle/working/norm_stats_cfg.yaml
+
+shutil.rmtree("/kaggle/working/_code", ignore_errors=True)
+!ls -R /kaggle/working | head -80
+
+# ---- Cell A5 --------------------------------------------------------
+# Bam "Save Version" -> "Save & Run All (Commit)". Output uoc ~13GB, nam gon duoi
+# gioi han commit 20GB cua Kaggle - khong can chia nhieu notebook.
+# Sau khi xong: mo Output -> "New Dataset" tu output nay,
+# dat slug vi du:  tartanair-v2-256
+# Cau truc dataset:
+#   /kaggle/input/tartanair-v2-256/tartanair-v2/<env>/<Data_x>/<Pxxx>/image_lcam_front/*.png
+#   /kaggle/input/tartanair-v2-256/tartanair-v2/<env>/<Data_x>/<Pxxx>/imu/{acc,gyro}.txt
+#   /kaggle/input/tartanair-v2-256/tartanair-v2-jepa/{train,valid,test}/manifest.csv
+#   /kaggle/input/tartanair-v2-256/norm_stats.yaml
+
+
+================================================================================
+ NOTEBOOK B : "qwt-train"
+   Settings: Accelerator = GPU P100 (hoac T4)  |  Internet = ON (de git clone)
+   Add data: dataset  <username>/tartanair-v2-256
+             (tu phien 2 tro di) them dataset run truoc -> xem muc C
+================================================================================
+
+# ---- Cell B1 : lay code -----------------------------------------------------
+!rm -rf /kaggle/working/qwt_jepa
+!git clone -q https://github.com/<USERNAME>/qwt_jepa.git /kaggle/working/qwt_jepa
+%cd /kaggle/working/qwt_jepa
+!git log -1 --oneline
+
+# ---- Cell B2 : config cho Kaggle ------------------------------------------
+# Copy base.yaml, chi doi khoi data:*  (giu nguyen model/masking/train con lai).
+import yaml, pathlib, copy
+
+base = yaml.safe_load(pathlib.Path("qwt_jepa/configs/base.yaml").read_text())
+D = "/kaggle/input/tartanair-v2-256"
+base["data"]["root"]            = f"{D}/tartanair-v2"
+base["data"]["jepa_root"]       = f"{D}/tartanair-v2-jepa"
+base["data"]["manifest"]["train"] = f"{D}/tartanair-v2-jepa/train/manifest.csv"
+base["data"]["manifest"]["valid"] = f"{D}/tartanair-v2-jepa/valid/manifest.csv"
+base["data"]["manifest"]["test"]  = f"{D}/tartanair-v2-jepa/test/manifest.csv"
+base["data"]["norm_stats"]        = f"{D}/norm_stats.yaml"
+# amp: giu 'bf16' (khong can GradScaler). P100/T4 khong co bf16 phan cung nhung
+# van chay dung, chi khong nhanh hon fp32. Muon chac chan toc do: doi 'none'.
+pathlib.Path("qwt_jepa/configs/kaggle.yaml").write_text(yaml.safe_dump(base, sort_keys=False))
+print("ok kaggle.yaml")
+
+# ---- Cell B3 : smoke test 10 batch --------------------------------------
+!python qwt_jepa/train/train.py \
+    --config qwt_jepa/configs/kaggle.yaml \
+    --out /kaggle/working/runs/base \
+    --batch-size 32 --epochs 1 --limit-train-batches 10 --num-workers 4
+
+# ---- Cell B4 : train that ---------------------------------------------------
+# Lan dau (khong resume). P100 batch 32 ~ vua 16GB; neu OOM ha 24 roi 16.
+# ~5-8 phut/epoch -> 1 phien 12h chay duoc ~80-100 epoch.
+!python qwt_jepa/train/train.py \
+    --config qwt_jepa/configs/kaggle.yaml \
+    --out /kaggle/working/runs/base \
+    --batch-size 32 --epochs 100 --num-workers 4
+
+# ---- Cell B5 --------------------------------------------------------
+# Truoc khi het gio: "Save Version (Commit)". Checkpoint o /kaggle/working/runs/base/last.pt
+# se nam trong Output cua notebook.
+
+
+================================================================================
+ C. CHAY TIEP CAC PHIEN SAU (resume)
+================================================================================
+1. Vao notebook qwt-train -> Add data -> "Notebook Output" -> chon output phien truoc
+   (hoac tao Dataset tu output do, vi du <username>/qwt-run-prev).
+   No se mount o:  /kaggle/input/<ten>/runs/base/last.pt
+
+2. Sua Cell B4 thanh:
+!python qwt_jepa/train/train.py \
+    --config qwt_jepa/configs/kaggle.yaml \
+    --out /kaggle/working/runs/base \
+    --batch-size 32 --epochs 100 --num-workers 4 \
+    --resume /kaggle/input/<ten-output-phien-truoc>/runs/base/last.pt
+
+   train.py se doc model/optimizer/scheduler, dat start_epoch = epoch_da_luu + 1,
+   chay tiep den khi du 100. LUU Y: giu nguyen --batch-size va --epochs moi phien
+   (total_steps phu thuoc 2 gia tri nay, doi se lech lich LR/EMA).
+
+3. Save Version. Lap lai cho den khi log in "xong."
+
+
+================================================================================
+ D. GHI CHU
+================================================================================
+- Quota GPU Kaggle: ~30h/tuan, moi phien toi da 12h. Notebook A khong dung GPU.
+- /kaggle/working gioi han output ~20GB -> vi vay Cell A3 resize + xoa raw.
+- num_workers: notebook GPU co 4 vCPU -> 4 la du.
+- batch_size goc trong base.yaml la 64 (cho GPU >= 24GB). Tren Kaggle dung 32 qua CLI.
+- Neu muon batch hieu dung = 64 ma van 16GB: can them gradient accumulation vao
+  qwt_jepa/train/engine.py (chua co) - noi neu can lam.
+- Kiem tra dong "[eval eN] L_jepa .. PSNR .. RMSE .." sau moi epoch de theo doi that su;
+  so trong vong lap train la theo batch nen nhieu manh.
+- Canh bao collapse: theo doi z_std; neu tut dan ve ~0.0x thi tang train.ema.start
+  (0.998-0.999) trong kaggle.yaml.
+================================================================================
