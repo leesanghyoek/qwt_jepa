@@ -26,6 +26,7 @@ import os
 import pathlib
 import sys
 import time
+from datetime import timedelta
 
 import torch
 import torch.distributed as dist
@@ -49,7 +50,8 @@ from qwt_jepa.train.train import build_scheduler                         # noqa:
 def ddp_setup() -> tuple[bool, int, int, int]:
     """Khoi tao process group neu chay duoi torchrun. Tra (is_dist, rank, world, local_rank)."""
     if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
-        dist.init_process_group(backend="nccl")
+        # timeout rong hon mac dinh 10' -> eval/luu checkpoint cham khong lam watchdog giet job
+        dist.init_process_group(backend="nccl", timeout=timedelta(minutes=30))
         rank = dist.get_rank()
         world = dist.get_world_size()
         local = int(os.environ.get("LOCAL_RANK", rank))
@@ -122,7 +124,14 @@ def main() -> None:
         train_ds, batch_size=bs, sampler=train_sampler,
         shuffle=(train_sampler is None), drop_last=True, **common,
     )
-    val_loader = DataLoader(val_ds, batch_size=bs, shuffle=False, drop_last=False, **common)
+    # eval: chia deu val cho cac rank -> nhanh gap so_gpu lan, khong rank nao cho lau
+    val_sampler = (
+        DistributedSampler(val_ds, num_replicas=world, rank=rank, shuffle=False, drop_last=False)
+        if is_dist else None
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=bs, sampler=val_sampler, shuffle=False, drop_last=False, **common
+    )
 
     core = QwtJepa(cfg).to(device)
     n_par = sum(p.numel() for p in core.parameters() if p.requires_grad)
@@ -178,30 +187,39 @@ def main() -> None:
         }
 
     @torch.no_grad()
-    def evaluate_main() -> dict:
+    def evaluate_dist() -> dict:
+        """Moi rank eval phan val cua minh -> all_reduce tong -> chia. MOI rank deu goi."""
         core.eval()
-        n = 0
-        agg = {"L_jepa": 0.0, "psnr": 0.0, "rmse_acc": 0.0, "rmse_gyro": 0.0}
+        # [sum L_jepa*b, sum mse*b, sum rmse_acc*b, sum rmse_gyro*b, n]
+        acc = torch.zeros(5, dtype=torch.float64, device=device)
         for batch in val_loader:
             batch = to_dev(batch)
             with autocast():
                 out = core(batch)
             _, logs = total_loss(out, batch, lam["lambda_img"], lam["lambda_imu"])
             b = batch["img_clean"].shape[0]
-            mse = torch.mean((out["img_rec"].float() - batch["img_clean"].float()) ** 2).item()
-            psnr = -10.0 * math.log10(max(mse, 1e-10))
+            mse = torch.mean((out["img_rec"].float() - batch["img_clean"].float()) ** 2)
             rmse_acc = torch.sqrt(torch.mean(
                 (out["imu_rec"][..., 0:3].float() - batch["imu_clean"][..., 0:3].float()) ** 2
-            )).item()
+            ))
             rmse_gyro = torch.sqrt(torch.mean(
                 (out["imu_rec"][..., 3:6].float() - batch["imu_clean"][..., 3:6].float()) ** 2
-            )).item()
-            agg["L_jepa"] += logs["L_jepa"] * b
-            agg["psnr"] += psnr * b
-            agg["rmse_acc"] += rmse_acc * b
-            agg["rmse_gyro"] += rmse_gyro * b
-            n += b
-        return {k: v / max(n, 1) for k, v in agg.items()}
+            ))
+            acc[0] += logs["L_jepa"] * b
+            acc[1] += mse.double() * b
+            acc[2] += rmse_acc.double() * b
+            acc[3] += rmse_gyro.double() * b
+            acc[4] += b
+        if is_dist:
+            dist.all_reduce(acc, op=dist.ReduceOp.SUM)
+        n = max(acc[4].item(), 1.0)
+        mse_mean = acc[1].item() / n
+        return {
+            "L_jepa": acc[0].item() / n,
+            "psnr": -10.0 * math.log10(max(mse_mean, 1e-10)),
+            "rmse_acc": acc[2].item() / n,
+            "rmse_gyro": acc[3].item() / n,
+        }
 
     for epoch in range(start_epoch, cfg["train"]["epochs"]):
         train_ds.set_epoch(epoch)
@@ -245,8 +263,9 @@ def main() -> None:
                     flush=True,
                 )
 
+        metrics = evaluate_dist()   # MOI rank cung goi (co all_reduce ben trong)
+
         if is_main:
-            metrics = evaluate_main()
             print(
                 f"[eval e{epoch}] L_jepa {metrics['L_jepa']:.4f} | PSNR {metrics['psnr']:.2f} dB | "
                 f"RMSE acc {metrics['rmse_acc']:.4f} gyro {metrics['rmse_gyro']:.4f}",
