@@ -72,16 +72,22 @@ git push -u origin main
 !git clone -q https://github.com/leesanghyoek/qwt_jepa.git /kaggle/working/_code
 
 # ---- Cell A2+A3 gop lam 1 : tai TUNG environment -> resize ngay -> xoa raw ----------------
-# Xu ly tuan tu tung env (khong tai het 14 env roi moi resize) de dinh dam bao khong
-# bao gio giu qua nhieu raw cung luc tren dia session Kaggle (~73GB tong).
+# NGUYEN NHAN THAT SU cua 2 lan bi "No space left on device" truoc do: RAW tung duoc
+# dat trong /kaggle/working, noi bi gioi han CUNG ~20GB (chung quota voi chinh output
+# cuoi cung se commit). Da sua: RAW nam o /kaggle/temp - o dia scratch RIENG cua Kaggle,
+# ~60GB, KHONG tinh vao gioi han 20GB do. /kaggle/working tu gio chi chua ban da resize
+# (~13GB, an toan). Van giu them tai tung difficulty rieng + delete_zip=True lam lop
+# an toan phu (giam dinh dung luong can trong /kaggle/temp, du no da rong rai hon nhieu).
 import glob, pathlib, shutil
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor
 import tartanair as ta
 
-RAW = "/kaggle/working/_raw"
+RAW = "/kaggle/temp/_raw"       # KHONG dat trong /kaggle/working - cho do bi gioi han cung ~20GB
+                                 # (chung quota voi output cuoi cung). /kaggle/temp la o dia
+                                 # scratch RIENG cua Kaggle, ~60GB, khong tinh vao gioi han do.
 DST = pathlib.Path("/kaggle/working/tartanair-v2")   # <- data_root cho train
-ta.init(tartanair_data_root=RAW)
+ta.init(tartanair_root=RAW)
 
 ENVS = [
     # 7 environment goc
@@ -96,29 +102,39 @@ def conv(p, src):
     p = pathlib.Path(p)
     if not p.is_file():
         return
+    suffix = p.suffix.lower()
+    if suffix not in (".png", ".txt"):
+        return   # bo qua .zip va bat ky file la nao khac - KHONG dung "else: copy tat ca"
+                 # (bug cu: neu zip chua kip xoa luc quet, no bi copy nham vao dataset)
     rel = p.relative_to(src)
     out = DST / rel
     out.parent.mkdir(parents=True, exist_ok=True)
-    if p.suffix.lower() == ".png":
+    if suffix == ".png":
         with Image.open(p) as im:
             im.convert("RGB").resize((256, 256), Image.BILINEAR).save(out)
-    else:  # acc.txt / gyro.txt / imu_time.txt / pose*.txt
+    else:  # acc.txt / gyro.txt / imu_time.txt / cam_time.txt / pose_lcam_front.txt
         shutil.copy2(p, out)
 
 for env in ENVS:
-    ta.download(
-        env=[env],
-        difficulty=["easy", "hard"],
-        modality=["image", "imu"],
-        camera_name=["lcam_front"],
-        unzip=True,
-    )
-    src = pathlib.Path(RAW)
-    files = glob.glob(str(src / "**" / "*"), recursive=True)
-    with ThreadPoolExecutor(8) as ex:
-        list(ex.map(lambda p: conv(p, src), files))
-    shutil.rmtree(RAW, ignore_errors=True)   # xoa raw cua env nay truoc khi sang env ke tiep
+    # Tai TUNG difficulty rieng (khong easy+hard cung luc) de dinh dinh dung luong raw
+    # dinh trong luc tai chi con ~1 nua 1 env - da tung bi "No space left on device"
+    # khi tai WaterMillDay (10GB) cung luc ca easy+hard.
+    for diff in ["easy", "hard"]:
+        ta.download(
+            env=[env],
+            difficulty=[diff],
+            modality=["image", "imu"],
+            camera_name=["lcam_front"],
+            unzip=True,
+            delete_zip=True,   # xoa tung zip ngay sau khi giai nen no, khong doi het rieng loat xong
+        )
+        src = pathlib.Path(RAW)
+        files = glob.glob(str(src / "**" / "*"), recursive=True)
+        with ThreadPoolExecutor(8) as ex:
+            list(ex.map(lambda p: conv(p, src), files))
+        shutil.rmtree(RAW, ignore_errors=True)
     print("done", env, flush=True)
+    !df -h /kaggle/working /kaggle/temp   # theo doi dinh trong con lai sau moi env
 
 print("resize xong ->", DST)
 !du -sh /kaggle/working/tartanair-v2
@@ -202,11 +218,16 @@ print("ok kaggle.yaml")
 
 # ---- Cell B4 : train that ---------------------------------------------------
 # Lan dau (khong resume). P100 batch 32 ~ vua 16GB; neu OOM ha 24 roi 16.
-# ~5-8 phut/epoch -> 1 phien 12h chay duoc ~80-100 epoch.
+# KHONG con chay het 2600 batch/epoch: base.yaml da dat train.limit_train_batches
+# (mac dinh 500) + train.limit_val_batches (100) + train.early_stop (patience 6 tren
+# val L_jepa). Epoch ngan hon ~5x -> ~1-2 phut/epoch. Bo --epochs de dung epochs=40
+# trong config (tran cung); early_stop thuong dung truoc do.
+# Muon epoch dai/ngan hon: sua train.limit_train_batches trong Cell B2 hoac
+#   base["train"]["limit_train_batches"] = 800   truoc khi ghi kaggle.yaml.
 !python qwt_jepa/train/train.py \
     --config qwt_jepa/configs/kaggle.yaml \
     --out /kaggle/working/runs/base \
-    --batch-size 32 --epochs 100 --num-workers 4
+    --batch-size 32 --num-workers 4
 
 # ---- Cell B5 --------------------------------------------------------
 # Truoc khi het gio: "Save Version (Commit)". Checkpoint o /kaggle/working/runs/base/last.pt
@@ -224,12 +245,14 @@ print("ok kaggle.yaml")
 !python qwt_jepa/train/train.py \
     --config qwt_jepa/configs/kaggle.yaml \
     --out /kaggle/working/runs/base \
-    --batch-size 32 --epochs 100 --num-workers 4 \
+    --batch-size 32 --num-workers 4 \
     --resume /kaggle/input/<ten-output-phien-truoc>/runs/base/last.pt
 
-   train.py se doc model/optimizer/scheduler, dat start_epoch = epoch_da_luu + 1,
-   chay tiep den khi du 100. LUU Y: giu nguyen --batch-size va --epochs moi phien
-   (total_steps phu thuoc 2 gia tri nay, doi se lech lich LR/EMA).
+   train.py se doc model/optimizer/scheduler + best + es_bad (bo dem early-stop),
+   dat start_epoch = epoch_da_luu + 1, chay tiep den khi early_stop kich hoat hoac
+   het epochs. LUU Y: giu nguyen --batch-size, train.epochs, train.limit_train_batches
+   moi phien (total_steps = epochs * limit_train_batches -> doi se lech lich LR/EMA).
+   Neu phien truoc da in "dung som" thi khong can chay tiep.
 
 3. Save Version. Lap lai cho den khi log in "xong."
 
@@ -247,4 +270,14 @@ print("ok kaggle.yaml")
   so trong vong lap train la theo batch nen nhieu manh.
 - Canh bao collapse: theo doi z_std; neu tut dan ve ~0.0x thi tang train.ema.start
   (0.998-0.999) trong kaggle.yaml.
+- Cat ngan train/eval + early stop (base.yaml, muc train:):
+    limit_train_batches: 500   # so batch/epoch (0 = full). Epoch time ~ ti le voi so nay
+    limit_val_batches:   100   # so batch eval/epoch (0 = full)
+    early_stop: {metric: L_jepa, mode: min, patience: 6, min_delta: 0.001}
+      -> dung khi val metric khong cai thien qua min_delta trong `patience` epoch lien tiep.
+      -> metric doi thanh psnr thi phai dat mode: max.
+      -> patience: 0 de TAT early stop.
+    best.pt luu theo dung metric early_stop (khong con co dinh L_jepa).
 ================================================================================
+
+claude --resume ba0e11ba-8f34-42ca-a011-24160eb6152a

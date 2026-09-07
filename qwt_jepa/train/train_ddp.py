@@ -44,7 +44,7 @@ from qwt_jepa.data.normalize import ImuNormalizer                        # noqa:
 from qwt_jepa.models.jepa import QwtJepa                                  # noqa: E402
 from qwt_jepa.train import ema_momentum                                   # noqa: E402
 from qwt_jepa.train.losses import total_loss                             # noqa: E402
-from qwt_jepa.train.train import build_scheduler                         # noqa: E402
+from qwt_jepa.train.train import _improved, build_scheduler             # noqa: E402
 
 
 def ddp_setup() -> tuple[bool, int, int, int]:
@@ -144,21 +144,36 @@ def main() -> None:
         lr=float(ocfg["lr"]), weight_decay=float(ocfg["weight_decay"]), betas=(0.9, 0.95),
     )
 
-    steps_per_epoch = args.limit_train_batches or len(train_loader)
+    tcfg = cfg["train"]
+    lim_train = args.limit_train_batches or int(tcfg.get("limit_train_batches", 0) or 0)
+    lim_val = int(tcfg.get("limit_val_batches", 0) or 0)
+
+    es = tcfg.get("early_stop") or {}
+    es_metric = str(es.get("metric", "L_jepa"))
+    es_mode = str(es.get("mode", "min")).lower()
+    es_patience = int(es.get("patience", 0) or 0)          # 0 = tat early stop
+    es_min_delta = float(es.get("min_delta", 0.0) or 0.0)
+
+    steps_per_epoch = lim_train or len(train_loader)
     total_steps = cfg["train"]["epochs"] * steps_per_epoch
     scheduler = build_scheduler(optimizer, cfg, total_steps)
 
-    start_epoch, step, best = 0, 0, math.inf
+    start_epoch, step = 0, 0
+    best = -math.inf if es_mode == "max" else math.inf
+    es_bad = 0
     if args.resume and pathlib.Path(args.resume).exists():
         ck = torch.load(args.resume, map_location=device)
         core.load_state_dict(ck["model"])
         optimizer.load_state_dict(ck["optimizer"])
         scheduler.load_state_dict(ck["scheduler"])
-        start_epoch, step, best = ck["epoch"] + 1, ck["step"], ck.get("best", math.inf)
+        start_epoch, step = ck["epoch"] + 1, ck["step"]
+        best = ck.get("best", best)
+        es_bad = int(ck.get("es_bad", 0))
         if ck.get("world_size", 1) != world:
             log(f"[canh bao] resume world_size {ck.get('world_size', 1)} -> {world}: "
                 f"lich LR/EMA se lech. Nen giu nguyen so GPU moi phien.")
-        log(f"resume tu {args.resume}: epoch {start_epoch}, step {step}")
+        log(f"resume tu {args.resume}: epoch {start_epoch}, step {step}, "
+            f"best {best:.4f}, es_bad {es_bad}/{es_patience}")
 
     model = (
         DDP(core, device_ids=[local] if torch.cuda.is_available() else None,
@@ -192,7 +207,9 @@ def main() -> None:
         core.eval()
         # [sum L_jepa*b, sum mse*b, sum rmse_acc*b, sum rmse_gyro*b, n]
         acc = torch.zeros(5, dtype=torch.float64, device=device)
-        for batch in val_loader:
+        for bi, batch in enumerate(val_loader):
+            if lim_val and bi >= lim_val:
+                break
             batch = to_dev(batch)
             with autocast():
                 out = core(batch)
@@ -263,7 +280,16 @@ def main() -> None:
                     flush=True,
                 )
 
-        metrics = evaluate_dist()   # MOI rank cung goi (co all_reduce ben trong)
+        metrics = evaluate_dist()   # MOI rank cung goi (all_reduce ben trong -> metrics giong nhau)
+
+        # metrics/best/es_bad giong het nhau tren moi rank -> quyet dinh early-stop
+        # deterministic, khong can broadcast.
+        cur = metrics[es_metric]
+        hit_best = _improved(cur, best, es_mode, es_min_delta)
+        if hit_best:
+            best, es_bad = cur, 0
+        else:
+            es_bad += 1
 
         if is_main:
             print(
@@ -278,20 +304,26 @@ def main() -> None:
                 "epoch": epoch,
                 "step": step,
                 "best": best,
+                "es_bad": es_bad,
                 "cfg": cfg,
                 "norm_stats": normalizer.to_dict(),
                 "val_metrics": metrics,
                 "world_size": world,
             }
             torch.save(ckpt, out_dir / "last.pt")
-            if metrics["L_jepa"] < best and (epoch + 1) % int(cfg["train"].get("ckpt_every", 1)) == 0:
-                best = metrics["L_jepa"]
-                ckpt["best"] = best
+            if hit_best:
                 torch.save(ckpt, out_dir / "best.pt")
-                print(f"  -> best.pt (val L_jepa {best:.4f})", flush=True)
+                print(f"  -> best.pt ({es_metric} {best:.4f})", flush=True)
+            elif es_patience:
+                print(f"  early-stop: {es_bad}/{es_patience} epoch khong cai thien "
+                      f"({es_metric} {cur:.4f} vs best {best:.4f})", flush=True)
 
         if is_dist:
             dist.barrier()
+
+        if es_patience and es_bad >= es_patience:
+            log(f"dung som o epoch {epoch} ({es_metric} khong cai thien {es_patience} epoch).")
+            break
 
     log("xong.")
     if is_dist:

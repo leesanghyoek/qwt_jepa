@@ -50,6 +50,13 @@ def build_loaders(cfg: dict, normalizer: ImuNormalizer):
     return train_ds, train_loader, val_loader
 
 
+def _improved(cur: float, best: float, mode: str, min_delta: float) -> bool:
+    """cur co tot hon best qua nguong min_delta khong? (mode: 'min' hoac 'max')"""
+    if mode == "max":
+        return cur > best + min_delta
+    return cur < best - min_delta
+
+
 def build_scheduler(optimizer, cfg: dict, total_steps: int):
     warmup = int(cfg["train"]["optimizer"].get("warmup_steps", 0))
 
@@ -113,45 +120,70 @@ def main() -> None:
         betas=(0.9, 0.95),
     )
 
-    steps_per_epoch = args.limit_train_batches or len(train_loader)
+    tcfg = cfg["train"]
+    lim_train = args.limit_train_batches or int(tcfg.get("limit_train_batches", 0) or 0)
+    lim_val = int(tcfg.get("limit_val_batches", 0) or 0)
+
+    es = tcfg.get("early_stop") or {}
+    es_metric = str(es.get("metric", "L_jepa"))
+    es_mode = str(es.get("mode", "min")).lower()
+    es_patience = int(es.get("patience", 0) or 0)          # 0 = tat early stop
+    es_min_delta = float(es.get("min_delta", 0.0) or 0.0)
+
+    steps_per_epoch = lim_train or len(train_loader)
     total_steps = cfg["train"]["epochs"] * steps_per_epoch
     scheduler = build_scheduler(optimizer, cfg, total_steps)
 
-    start_epoch, step, best = 0, 0, math.inf
+    start_epoch, step = 0, 0
+    best = -math.inf if es_mode == "max" else math.inf
+    es_bad = 0
     if args.resume and pathlib.Path(args.resume).exists():
         ck = torch.load(args.resume, map_location=device)
         model.load_state_dict(ck["model"])
         optimizer.load_state_dict(ck["optimizer"])
         scheduler.load_state_dict(ck["scheduler"])
-        start_epoch, step, best = ck["epoch"] + 1, ck["step"], ck.get("best", math.inf)
-        print(f"resume tu {args.resume}: epoch {start_epoch}, step {step}")
+        start_epoch, step = ck["epoch"] + 1, ck["step"]
+        best = ck.get("best", best)
+        es_bad = int(ck.get("es_bad", 0))
+        print(f"resume tu {args.resume}: epoch {start_epoch}, step {step}, "
+              f"best {best:.4f}, es_bad {es_bad}/{es_patience}")
+
+    print(f"train: {steps_per_epoch} batch/epoch | epochs {cfg['train']['epochs']} | "
+          f"early_stop {es_metric} ({es_mode}) patience {es_patience or 'off'}")
 
     for epoch in range(start_epoch, cfg["train"]["epochs"]):
         train_ds.set_epoch(epoch)
         loader = train_loader
-        if args.limit_train_batches:
+        if lim_train:
             from itertools import islice
 
             class _Cut:
                 batch_size = train_loader.batch_size
 
                 def __iter__(self_):
-                    return islice(iter(train_loader), args.limit_train_batches)
+                    return islice(iter(train_loader), lim_train)
 
                 def __len__(self_):
-                    return args.limit_train_batches
+                    return lim_train
 
             loader = _Cut()
 
         step = train_one_epoch(
             model, loader, optimizer, scheduler, cfg, device, step, total_steps, epoch
         )
-        metrics = evaluate(model, val_loader, cfg, device)
+        metrics = evaluate(model, val_loader, cfg, device, max_batches=lim_val)
         print(
             f"[eval e{epoch}] L_jepa {metrics['L_jepa']:.4f} | PSNR {metrics['psnr']:.2f} dB | "
             f"RMSE acc {metrics['rmse_acc']:.4f} gyro {metrics['rmse_gyro']:.4f}",
             flush=True,
         )
+
+        cur = metrics[es_metric]
+        hit_best = _improved(cur, best, es_mode, es_min_delta)
+        if hit_best:
+            best, es_bad = cur, 0
+        else:
+            es_bad += 1
 
         ckpt = {
             "model": model.state_dict(),
@@ -160,16 +192,22 @@ def main() -> None:
             "epoch": epoch,
             "step": step,
             "best": best,
+            "es_bad": es_bad,
             "cfg": cfg,
             "norm_stats": normalizer.to_dict(),
             "val_metrics": metrics,
         }
         torch.save(ckpt, out_dir / "last.pt")
-        if metrics["L_jepa"] < best and (epoch + 1) % int(cfg["train"].get("ckpt_every", 1)) == 0:
-            best = metrics["L_jepa"]
-            ckpt["best"] = best
+        if hit_best:
             torch.save(ckpt, out_dir / "best.pt")
-            print(f"  -> best.pt (val L_jepa {best:.4f})")
+            print(f"  -> best.pt ({es_metric} {best:.4f})")
+        elif es_patience:
+            print(f"  early-stop: {es_bad}/{es_patience} epoch khong cai thien "
+                  f"({es_metric} {cur:.4f} vs best {best:.4f})")
+
+        if es_patience and es_bad >= es_patience:
+            print(f"dung som o epoch {epoch} ({es_metric} khong cai thien {es_patience} epoch).")
+            break
 
     print("xong.")
 

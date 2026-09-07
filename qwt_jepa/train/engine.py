@@ -77,13 +77,15 @@ def train_one_epoch(
 
 
 @torch.no_grad()
-def evaluate(model, loader, cfg: dict, device: torch.device) -> dict:
+def evaluate(model, loader, cfg: dict, device: torch.device, max_batches: int = 0) -> dict:
     model.eval()
     lam = cfg["train"]["loss"]
     n = 0
     agg = {"L_jepa": 0.0, "psnr": 0.0, "rmse_acc": 0.0, "rmse_gyro": 0.0}
 
-    for batch in loader:
+    for bi, batch in enumerate(loader):
+        if max_batches and bi >= max_batches:
+            break
         batch = _to_device(batch, device)
         with _autocast(cfg, device):
             out = model(batch)

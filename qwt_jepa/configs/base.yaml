@@ -51,10 +51,17 @@ masking:
   context_keep_ratio:   0.5
 
 train:
-  epochs: 100
+  epochs: 40                  # tran cung; early_stop thuong dung truoc muc nay
   batch_size: 8
   num_workers: 4
-  optimizer: {name: adamw, lr: 1.5e-4, weight_decay: 0.05, warmup_steps: 2000}
+  limit_train_batches: 500    # 0 = full (~2600 batch/epoch). 500 * bs8 = 4000 sample/epoch
+  limit_val_batches: 100      # 0 = full. Cat ngan eval cho nhanh
+  early_stop:
+    metric: L_jepa            # L_jepa | psnr | rmse_acc | rmse_gyro (key trong val metrics)
+    mode: min                 # min cho loss/rmse, max cho psnr
+    patience: 6               # so epoch lien tiep khong cai thien -> dung. 0 = tat
+    min_delta: 0.001          # cai thien nho hon nguong nay coi nhu khong cai thien
+  optimizer: {name: adamw, lr: 1.5e-4, weight_decay: 0.05, warmup_steps: 500}
   ema: {start: 0.996, end: 1.0}
   loss: {lambda_img: 1.0, lambda_imu: 1.0}
   amp: bf16
