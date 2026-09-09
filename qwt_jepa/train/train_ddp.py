@@ -71,6 +71,7 @@ def main() -> None:
     ap.add_argument("--num-workers", type=int, default=-1)
     ap.add_argument("--encoder-depth", type=int, default=0)
     ap.add_argument("--limit-train-batches", type=int, default=0)
+    ap.add_argument("--limit-val-batches", type=int, default=0)
     ap.add_argument("--find-unused", type=int, default=1, help="DDP find_unused_parameters (1/0)")
     args = ap.parse_args()
 
@@ -147,7 +148,7 @@ def main() -> None:
 
     tcfg = cfg["train"]
     lim_train = args.limit_train_batches or int(tcfg.get("limit_train_batches", 0) or 0)
-    lim_val = int(tcfg.get("limit_val_batches", 0) or 0)
+    lim_val = args.limit_val_batches or int(tcfg.get("limit_val_batches", 0) or 0)
 
     es = tcfg.get("early_stop") or {}
     es_metric = str(es.get("metric", "L_jepa"))

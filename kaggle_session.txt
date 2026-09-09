@@ -302,11 +302,27 @@ print("  data.root  :", base["data"]["root"])
 print("  manifest   :", base["data"]["manifest"]["train"])
 print("  norm_stats :", base["data"]["norm_stats"])
 
-# ---- Cell B3 : smoke test 10 batch --------------------------------------
+# ---- Cell B3 : smoke test --------------------------------------------------
+# --out tro vao runs/_smoke chu KHONG phai runs/base: smoke test cung ghi last.pt +
+# best.pt, de chung cho voi lan train that se de nham checkpoint 1-epoch cua smoke
+# la checkpoint that (nhat la khi --resume o phien sau).
+# --limit-val-batches 5 cho eval chi 5 batch thay vi 100 -> smoke xong trong ~10s.
 !python qwt_jepa/train/train.py \
     --config qwt_jepa/configs/kaggle.yaml \
-    --out /kaggle/working/runs/base \
-    --batch-size 32 --epochs 1 --limit-train-batches 10 --num-workers 4
+    --out /kaggle/working/runs/_smoke \
+    --batch-size 32 --epochs 1 \
+    --limit-train-batches 10 --limit-val-batches 5 --num-workers 4
+
+# DOC KY 4 DONG SAU TRONG OUTPUT, sai bat ky dong nao thi DUNG, dung chay B4:
+#   norm stats: /kaggle/input/...      <- KHONG duoc la "[canh bao] ... dung identity"
+#   QwtJepa: ... | N tokens 512        <- phai la 512, khong phai 1280
+#   e0 0/10 ... z_std 0.2xx ...        <- z_std quanh 0.25-0.30, KHONG duoc ~0
+#   [eval e0] L_jepa ... PSNR ... dB   <- ra so, khong NaN (PSNR ~3 dB la BINH THUONG:
+#                                         model chua hoc gi, day chi la kiem tra duong ong)
+# KHONG dung im/s cua B3 de kiem tra amp: 10 batch thi con so nay bi warmup chi phoi
+# (thuong chi ~13 im/s). Kiem amp o B4 sau vai chuc batch: ~150+ im/s la amp dang an,
+# ~60 im/s la amp chua an (kiem lai base["train"]["amp"] = "fp16" o Cell B2).
+!rm -rf /kaggle/working/runs/_smoke     # don sach, khong de lot vao Save Version
 
 # ---- Cell B4 : train that ---------------------------------------------------
 # Lan dau (khong resume).

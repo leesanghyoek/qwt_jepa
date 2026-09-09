@@ -79,6 +79,8 @@ def main() -> None:
     ap.add_argument("--num-workers", type=int, default=-1, help="ghi de train.num_workers")
     ap.add_argument("--encoder-depth", type=int, default=0, help="ghi de model.encoder.depth")
     ap.add_argument("--limit-train-batches", type=int, default=0, help="debug: cat ngan 1 epoch")
+    ap.add_argument("--limit-val-batches", type=int, default=0,
+                    help="debug: cat ngan vong eval (0 = dung train.limit_val_batches)")
     args = ap.parse_args()
 
     cfg = yaml.safe_load(pathlib.Path(args.config).read_text())
@@ -122,7 +124,7 @@ def main() -> None:
 
     tcfg = cfg["train"]
     lim_train = args.limit_train_batches or int(tcfg.get("limit_train_batches", 0) or 0)
-    lim_val = int(tcfg.get("limit_val_batches", 0) or 0)
+    lim_val = args.limit_val_batches or int(tcfg.get("limit_val_batches", 0) or 0)
 
     es = tcfg.get("early_stop") or {}
     es_metric = str(es.get("metric", "L_jepa"))
