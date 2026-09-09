@@ -244,7 +244,7 @@ print("  norm_stats.yaml:", pathlib.Path("/kaggle/working/norm_stats.yaml").exis
 # Van khong duoc thi Run -> Restart session.
 %cd /kaggle/working
 !rm -rf /kaggle/working/qwt_jepa
-!git clone -q https://github.com/<USERNAME>/qwt_jepa.git /kaggle/working/qwt_jepa
+!git clone -q https://github.com/leesanghyoek/qwt_jepa.git /kaggle/working/qwt_jepa
 %cd /kaggle/working/qwt_jepa
 !git log -1 --oneline
 
@@ -401,9 +401,26 @@ print("ma thoat:", proc.returncode)
 #  !python qwt_jepa/train/train.py --config qwt_jepa/configs/kaggle.yaml \
 #      --out /kaggle/working/runs/base --batch-size 32 --num-workers 4 )
 
-# ---- Cell B5 --------------------------------------------------------
-# Truoc khi het gio: "Save Version (Commit)". Checkpoint o /kaggle/working/runs/base/last.pt
-# se nam trong Output cua notebook.
+# ---- Cell B5 : kiem tra checkpoint truoc khi Save Version -------------------
+import pathlib, torch
+
+ck = pathlib.Path("/kaggle/working/runs/base/last.pt")
+if not ck.exists():
+    print("CHUA CO last.pt -> B4 chua chay xong hoac da loi. Dung Save Version voi.")
+else:
+    d = torch.load(ck, map_location="cpu")
+    best = d.get("best")
+    best = f"{best:.4f}" if isinstance(best, float) and best == best and abs(best) != float("inf") else str(best)
+    print(f"last.pt   {ck.stat().st_size / 2**20:6.0f} MB")
+    print(f"  epoch {d['epoch']} | step {d['step']} | best {best} | es_bad {d.get('es_bad')}")
+    print(f"  val: " + " ".join(f"{k} {v:.4f}" for k, v in d.get("val_metrics", {}).items()))
+    print(f"  token_patch_image {d['cfg']['model']['token_patch_image']} | amp {d['cfg']['train']['amp']}")
+    print(f"  best.pt co: {(ck.parent / 'best.pt').exists()}")
+
+# Truoc khi het gio 12h: bam "Save Version" -> "Quick Save" (nhanh, giu nguyen output
+# dang co) hoac "Save & Run All (Commit)" (chay lai tu dau - CHI dung khi muon chay lai).
+# Checkpoint /kaggle/working/runs/base/last.pt se nam trong Output cua notebook, dung
+# lam input cho phien sau (xem muc C).
 
 
 ================================================================================
