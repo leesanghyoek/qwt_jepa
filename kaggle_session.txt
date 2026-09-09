@@ -324,10 +324,58 @@ print("  norm_stats :", base["data"]["norm_stats"])
 # trong config (tran cung); early_stop thuong dung truoc do.
 # Muon epoch dai/ngan hon: sua train.limit_train_batches trong Cell B2 hoac
 #   base["train"]["limit_train_batches"] = 800   truoc khi ghi kaggle.yaml.
-!python qwt_jepa/train/train.py \
-    --config qwt_jepa/configs/kaggle.yaml \
-    --out /kaggle/working/runs/base \
-    --batch-size 32 --num-workers 4
+# Chay bang WRAPPER thay vi "!python ..." truc tiep. Ly do: train in ~10 dong/epoch,
+# 40 epoch = ~400 dong, chay lai vai lan trong 1 phien la treo trinh duyet. Wrapper
+# nay VE DE LEN CHO CU (clear_output) nen so dong tren man hinh KHONG BAO GIO TANG,
+# nhung van thay tien do; log day du van duoc ghi ra file de xem lai.
+import subprocess, collections, time
+from IPython.display import clear_output
+
+CMD = ["python", "qwt_jepa/train/train.py",
+       "--config", "qwt_jepa/configs/kaggle.yaml",
+       "--out", "/kaggle/working/runs/base",
+       "--batch-size", "32", "--num-workers", "4"]
+TAIL      = 20                          # so dong log gan nhat giu tren man hinh
+REFRESH_S = 0.7                         # toi thieu bao lau moi ve lai (tranh spam DOM)
+LOGFILE   = "/kaggle/working/train.log"
+
+KEY = ("[eval", "resume tu", "train ", "train:", "norm stats", "QwtJepa",
+       "best.pt", "early-stop", "dung som", "xong.", "canh bao", "Error", "Traceback")
+tail, marks = collections.deque(maxlen=TAIL), []
+t0 = last = time.time()
+
+def draw(done=False):
+    clear_output(wait=True)
+    if marks:
+        print("=== MOC QUAN TRONG (giu lai het) ===")
+        print("\n".join(marks[-14:]))
+        print()
+    print(f"=== {TAIL} DONG GAN NHAT   |   da chay {(time.time()-t0)/60:.1f} phut ===")
+    print("\n".join(tail))
+    print(f"\nlog day du: {LOGFILE}" + ("   [DA XONG]" if done else ""))
+
+with open(LOGFILE, "w") as lf:
+    proc = subprocess.Popen(CMD, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, bufsize=1)
+    for line in proc.stdout:
+        line = line.rstrip()
+        lf.write(line + "\n"); lf.flush()      # flush de xem duoc log ngay ca khi notebook chet
+        tail.append(line)
+        if any(k in line for k in KEY):
+            marks.append(line)
+        if time.time() - last > REFRESH_S:
+            draw(); last = time.time()
+    proc.wait()
+draw(done=True)
+print("ma thoat:", proc.returncode)
+
+# Muon xem lai toan bo log sau do:
+#   !tail -100 /kaggle/working/train.log
+#   !grep "^\[eval" /kaggle/working/train.log       # chi cac dong eval
+#
+# (Ban cu, khong wrapper - dung neu muon xem het output:
+#  !python qwt_jepa/train/train.py --config qwt_jepa/configs/kaggle.yaml \
+#      --out /kaggle/working/runs/base --batch-size 32 --num-workers 4 )
 
 # ---- Cell B5 --------------------------------------------------------
 # Truoc khi het gio: "Save Version (Commit)". Checkpoint o /kaggle/working/runs/base/last.pt
