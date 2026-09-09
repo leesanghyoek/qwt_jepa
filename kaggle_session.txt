@@ -193,22 +193,77 @@ shutil.rmtree("/kaggle/working/_code", ignore_errors=True)
 %cd /kaggle/working/qwt_jepa
 !git log -1 --oneline
 
+# ---- Cell B0 (chan doan) : xem /kaggle/input that su co gi ------------------
+# Chay cai nay TRUOC khi bao "code loi". Loi FileNotFoundError o manifest.csv gan nhu
+# luon la do dataset chua duoc gan, hoac gan voi slug/cau truc khac du kien.
+import pathlib, os
+IN = pathlib.Path("/kaggle/input")
+print("Dataset dang gan vao notebook:", [p.name for p in IN.iterdir()] or "(KHONG CO GI)")
+for root, dirs, files in os.walk(IN):
+    d = root.count(os.sep) - 2
+    if d > 3:
+        dirs[:] = []
+        continue
+    print("   " * d + "|- " + (os.path.basename(root) or str(root)) + "/")
+    for f in sorted(files)[:3]:
+        print("   " * (d + 1) + "|- " + f)
+    if len(files) > 3:
+        print("   " * (d + 1) + f"... (+{len(files)-3} file nua)")
+
 # ---- Cell B2 : config cho Kaggle ------------------------------------------
-# Copy base.yaml, chi doi khoi data:*  (giu nguyen model/masking/train con lai).
-import yaml, pathlib, copy
+# TU DO TIM duong dan thay vi hard-code "/kaggle/input/tartanair-v2-256".
+# Ly do: slug dataset phu thuoc ten ban dat luc "New Dataset" tu output Notebook A,
+# va Kaggle doi khi them mot cap thu muc. Hard-code lam Cell B3 chet voi
+# FileNotFoundError o manifest.csv ma khong noi ro thieu gi.
+import yaml, pathlib
+
+IN = pathlib.Path("/kaggle/input")
+man = sorted(IN.glob("*/train/manifest.csv")) + sorted(IN.glob("*/*/train/manifest.csv"))
+if not man:
+    man = sorted(IN.rglob("train/manifest.csv"))
+if not man:
+    raise SystemExit(
+        "KHONG tim thay */train/manifest.csv trong /kaggle/input.\n"
+        "  1) Notebook A (qwt-prepare-data) da chay xong VA da bam 'Save Version' chua?\n"
+        "  2) Da mo Output cua Notebook A -> 'New Dataset' de tao dataset chua?\n"
+        "  3) Trong notebook nay da bam 'Add Input' -> chon dataset do chua?\n"
+        f"  Hien /kaggle/input co: {[p.name for p in IN.iterdir()] or '(rong)'}"
+    )
+
+JEPA = man[0].parent.parent                      # .../tartanair-v2-jepa
+DS = JEPA.parent                                 # .../<slug dataset>
+root = next((p for p in DS.iterdir()
+             if p.is_dir() and p != JEPA and any(p.glob("*/*/*/image_lcam_front"))), None)
+if root is None:
+    raise SystemExit(f"Thay manifest o {JEPA} nhung KHONG thay thu muc anh "
+                     f"(<env>/<Data_x>/<Pxxx>/image_lcam_front) trong {DS}")
 
 base = yaml.safe_load(pathlib.Path("qwt_jepa/configs/base.yaml").read_text())
-D = "/kaggle/input/tartanair-v2-256"
-base["data"]["root"]            = f"{D}/tartanair-v2"
-base["data"]["jepa_root"]       = f"{D}/tartanair-v2-jepa"
-base["data"]["manifest"]["train"] = f"{D}/tartanair-v2-jepa/train/manifest.csv"
-base["data"]["manifest"]["valid"] = f"{D}/tartanair-v2-jepa/valid/manifest.csv"
-base["data"]["manifest"]["test"]  = f"{D}/tartanair-v2-jepa/test/manifest.csv"
-base["data"]["norm_stats"]        = f"{D}/norm_stats.yaml"
+base["data"]["root"] = str(root)
+base["data"]["jepa_root"] = str(JEPA)
+for split, fn in [("train", "train"), ("valid", "valid"), ("test", "test")]:
+    base["data"]["manifest"][split] = str(JEPA / fn / "manifest.csv")
+
+ns = next(iter(DS.rglob("norm_stats.yaml")), None)
+if ns is None:
+    # Khong co thi tinh ngay tai day - nhanh hon nhieu so voi train bang identity
+    # (identity = KHONG chuan hoa -> acc/gyro lech thang do, loss IMU vo nghia).
+    base["data"]["norm_stats"] = "/kaggle/working/norm_stats.yaml"
+    pathlib.Path("qwt_jepa/configs/kaggle.yaml").write_text(yaml.safe_dump(base, sort_keys=False))
+    print("[canh bao] khong thay norm_stats.yaml trong dataset -> dang tinh lai...")
+    import subprocess
+    subprocess.run(["python", "qwt_jepa/scripts/compute_norm_stats.py",
+                    "--config", "qwt_jepa/configs/kaggle.yaml"], check=True)
+else:
+    base["data"]["norm_stats"] = str(ns)
+
 # amp: giu 'bf16' (khong can GradScaler). P100/T4 khong co bf16 phan cung nhung
 # van chay dung, chi khong nhanh hon fp32. Muon chac chan toc do: doi 'none'.
 pathlib.Path("qwt_jepa/configs/kaggle.yaml").write_text(yaml.safe_dump(base, sort_keys=False))
 print("ok kaggle.yaml")
+print("  data.root  :", base["data"]["root"])
+print("  manifest   :", base["data"]["manifest"]["train"])
+print("  norm_stats :", base["data"]["norm_stats"])
 
 # ---- Cell B3 : smoke test 10 batch --------------------------------------
 !python qwt_jepa/train/train.py \
