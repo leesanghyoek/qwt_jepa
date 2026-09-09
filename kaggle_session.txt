@@ -62,6 +62,35 @@ git push -u origin main
 
 
 ================================================================================
+ CELL 0 : THAY CELL MAC DINH CUA KAGGLE  (dan vao CA HAI notebook A va B)
+================================================================================
+# Kaggle tu sinh mot cell dau tien in RA TUNG DUONG DAN FILE:
+#     for dirname, _, filenames in os.walk('/kaggle/input'):
+#         for filename in filenames:
+#             print(os.path.join(dirname, filename))
+# Dataset nay co hon 20.000 anh -> hon 20.000 dong output -> treo trinh duyet.
+# XOA cell do di, thay bang cell duoi (chi ~10 dong/dataset, khong goi stat() nen nhanh).
+
+import os, collections
+
+IN = "/kaggle/input"
+if not os.path.isdir(IN) or not os.listdir(IN):
+    print("/kaggle/input RONG - chua Add Input dataset nao.")
+for ds in sorted(os.listdir(IN)):
+    base = os.path.join(IN, ds)
+    nf, ext, top = 0, collections.Counter(), collections.Counter()
+    for root, _, files in os.walk(base):
+        nf += len(files)
+        top[os.path.relpath(root, base).split(os.sep)[0]] += len(files)
+        for f in files:
+            ext[os.path.splitext(f)[1].lower() or "(khong duoi)"] += 1
+    print(f"\n{ds}/   {nf:,} file")
+    for k, c in top.most_common(6):
+        print(f"    {k[:34]:36} {c:>9,} file")
+    print("    duoi:", ", ".join(f"{e} {c:,}" for e, c in ext.most_common(4)))
+
+
+================================================================================
  NOTEBOOK A : "qwt-prepare-data"
    Settings: Internet = ON (verify phone 1 lan) | Accelerator = None | Persistence = Files
    Khong can Add data gi them - Cell A4 tu clone code va tu sinh manifest/norm_stats.
@@ -78,7 +107,7 @@ git push -u origin main
 # ~60GB, KHONG tinh vao gioi han 20GB do. /kaggle/working tu gio chi chua ban da resize
 # (~13GB, an toan). Van giu them tai tung difficulty rieng + delete_zip=True lam lop
 # an toan phu (giam dinh dung luong can trong /kaggle/temp, du no da rong rai hon nhieu).
-import glob, pathlib, shutil
+import glob, pathlib, shutil, io, contextlib
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor
 import tartanair as ta
@@ -120,21 +149,30 @@ for env in ENVS:
     # dinh trong luc tai chi con ~1 nua 1 env - da tung bi "No space left on device"
     # khi tai WaterMillDay (10GB) cung luc ca easy+hard.
     for diff in ["easy", "hard"]:
-        ta.download(
-            env=[env],
-            difficulty=[diff],
-            modality=["image", "imu"],
-            camera_name=["lcam_front"],
-            unzip=True,
-            delete_zip=True,   # xoa tung zip ngay sau khi giai nen no, khong doi het rieng loat xong
-        )
+        # ta.download() in tien do TUNG FILE -> hang nghin dong, treo trinh duyet.
+        # Nuot output khi THANH CONG; neu loi thi moi in 3000 ky tu cuoi de con debug.
+        _log = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(_log):
+                ta.download(
+                    env=[env],
+                    difficulty=[diff],
+                    modality=["image", "imu"],
+                    camera_name=["lcam_front"],
+                    unzip=True,
+                    delete_zip=True,   # xoa tung zip ngay sau khi giai nen, khong doi het loat
+                )
+        except Exception:
+            print(_log.getvalue()[-3000:])
+            raise
         src = pathlib.Path(RAW)
         files = glob.glob(str(src / "**" / "*"), recursive=True)
         with ThreadPoolExecutor(8) as ex:
             list(ex.map(lambda p: conv(p, src), files))
         shutil.rmtree(RAW, ignore_errors=True)
-    print("done", env, flush=True)
-    !df -h /kaggle/working /kaggle/temp   # theo doi dinh trong con lai sau moi env
+    free = {d: shutil.disk_usage(d)[2] / 2**30 for d in ("/kaggle/working", "/kaggle/temp")}
+    print(f"done {env:22} | working con {free['/kaggle/working']:5.1f} GB"
+          f" | temp con {free['/kaggle/temp']:5.1f} GB", flush=True)   # 1 dong thay vi df -h 6 dong
 
 print("resize xong ->", DST)
 !du -sh /kaggle/working/tartanair-v2
@@ -166,7 +204,16 @@ pathlib.Path("/kaggle/working/norm_stats_cfg.yaml").write_text(kaggle_cfg)
 !python /kaggle/working/_code/qwt_jepa/scripts/compute_norm_stats.py --config /kaggle/working/norm_stats_cfg.yaml
 
 shutil.rmtree("/kaggle/working/_code", ignore_errors=True)
-!ls -R /kaggle/working | head -80
+
+# Truoc day: !ls -R /kaggle/working | head -80  -> van rat dai. Dem tom tat thay the:
+import os, csv
+n = sum(len(f) for _, _, f in os.walk("/kaggle/working"))
+print(f"/kaggle/working: {n:,} file")
+for split in ("train", "valid", "test"):
+    fp = JEPA / split / "manifest.csv"
+    rows = sum(1 for _ in open(fp)) - 1 if fp.exists() else "THIEU"
+    print(f"  {split:6} manifest: {rows} dong")
+print("  norm_stats.yaml:", pathlib.Path("/kaggle/working/norm_stats.yaml").exists())
 
 # ---- Cell A5 --------------------------------------------------------
 # Bam "Save Version" -> "Save & Run All (Commit)". Output uoc ~13GB, nam gon duoi
@@ -193,22 +240,7 @@ shutil.rmtree("/kaggle/working/_code", ignore_errors=True)
 %cd /kaggle/working/qwt_jepa
 !git log -1 --oneline
 
-# ---- Cell B0 (chan doan) : xem /kaggle/input that su co gi ------------------
-# Chay cai nay TRUOC khi bao "code loi". Loi FileNotFoundError o manifest.csv gan nhu
-# luon la do dataset chua duoc gan, hoac gan voi slug/cau truc khac du kien.
-import pathlib, os
-IN = pathlib.Path("/kaggle/input")
-print("Dataset dang gan vao notebook:", [p.name for p in IN.iterdir()] or "(KHONG CO GI)")
-for root, dirs, files in os.walk(IN):
-    d = root.count(os.sep) - 2
-    if d > 3:
-        dirs[:] = []
-        continue
-    print("   " * d + "|- " + (os.path.basename(root) or str(root)) + "/")
-    for f in sorted(files)[:3]:
-        print("   " * (d + 1) + "|- " + f)
-    if len(files) > 3:
-        print("   " * (d + 1) + f"... (+{len(files)-3} file nua)")
+# ---- Cell B0 : dan lai CELL 0 o tren (tom tat /kaggle/input, ~10 dong) ---------
 
 # ---- Cell B2 : config cho Kaggle ------------------------------------------
 # TU DO TIM duong dan thay vi hard-code "/kaggle/input/tartanair-v2-256".
