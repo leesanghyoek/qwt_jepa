@@ -235,6 +235,14 @@ print("  norm_stats.yaml:", pathlib.Path("/kaggle/working/norm_stats.yaml").exis
 ================================================================================
 
 # ---- Cell B1 : lay code -----------------------------------------------------
+# %cd RA NGOAI TRUOC KHI XOA. Lan chay truoc da %cd vao /kaggle/working/qwt_jepa, neu
+# xoa ngay thi kernel dang dung trong thu muc vua bi xoa -> getcwd() hong, moi lenh
+# shell sau do deu chet:
+#     shell-init: error retrieving current directory: getcwd: cannot access parent...
+#     fatal: Unable to read current working directory
+# Neu da lo dinh loi do: chay rieng mot cell "%cd /kaggle/working" roi chay lai cell nay.
+# Van khong duoc thi Run -> Restart session.
+%cd /kaggle/working
 !rm -rf /kaggle/working/qwt_jepa
 !git clone -q https://github.com/<USERNAME>/qwt_jepa.git /kaggle/working/qwt_jepa
 %cd /kaggle/working/qwt_jepa
