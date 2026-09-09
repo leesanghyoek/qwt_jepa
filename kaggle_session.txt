@@ -217,7 +217,8 @@ print("ok kaggle.yaml")
     --batch-size 32 --epochs 1 --limit-train-batches 10 --num-workers 4
 
 # ---- Cell B4 : train that ---------------------------------------------------
-# Lan dau (khong resume). P100 batch 32 ~ vua 16GB; neu OOM ha 24 roi 16.
+# Lan dau (khong resume). token_patch_image da doi 8 -> 16 nen so token giam 1280 -> 512,
+# VRAM nhe hon nhieu: P100/T4 chay duoc batch 48-64. Neu OOM ha ve 32.
 # KHONG con chay het 2600 batch/epoch: base.yaml da dat train.limit_train_batches
 # (mac dinh 500) + train.limit_val_batches (100) + train.early_stop (patience 6 tren
 # val L_jepa). Epoch ngan hon ~5x -> ~1-2 phut/epoch. Bo --epochs de dung epochs=40
@@ -256,6 +257,10 @@ print("ok kaggle.yaml")
 
 3. Save Version. Lap lai cho den khi log in "xong."
 
+CANH BAO khi resume: checkpoint luu TRUOC ngay 2026-09-09 dung token_patch_image=8,
+khong nap duoc vao model hien tai (=16) -> load_state_dict se bao loi shape. Phai train
+lai tu dau, KHONG dung --resume voi checkpoint cu.
+
 
 ================================================================================
  D. GHI CHU
@@ -269,7 +274,16 @@ print("ok kaggle.yaml")
 - Kiem tra dong "[eval eN] L_jepa .. PSNR .. RMSE .." sau moi epoch de theo doi that su;
   so trong vong lap train la theo batch nen nhieu manh.
 - Canh bao collapse: theo doi z_std; neu tut dan ve ~0.0x thi tang train.ema.start
-  (0.998-0.999) trong kaggle.yaml.
+  (0.998-0.999) trong kaggle.yaml. Luc khoi tao z_std ~0.246 (do tren RTX 4060).
+- Khoi `corruption:` da doi han (profile DRONE, low-light, khong quy luat). Xem chu thich
+  trong base.yaml. Cac nut chinh:
+    couple / condition : rang buoc do sang <-> do nhoe <-> muc nhieu; `condition` san > 0
+                         de khong sinh ra cap (sach, gan nhu sach)
+    exposure           : da so anh TOI di ~10% -> model hoc TANG DO SANG
+    alias_freq/p_alias : rung rotor drone (70-280 Hz) gap tan so xuong bang 100 Hz
+    burst/step/stuck   : nhieu IMU khong deu theo thoi gian
+- LUU Y ve metric: exposure lam anh toi, nen PSNR trong log gop CA bu sang lan khu nhieu.
+  Khong so PSNR voi cac lan chay truoc ngay 2026-09-09.
 - Cat ngan train/eval + early stop (base.yaml, muc train:):
     limit_train_batches: 500   # so batch/epoch (0 = full). Epoch time ~ ti le voi so nay
     limit_val_batches:   100   # so batch eval/epoch (0 = full)

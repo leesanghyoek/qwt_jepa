@@ -55,6 +55,7 @@ class PairedNoisyCleanDataset(Dataset):
         ucfg = cfg["data"]["imu"]
         self.img_size = int(icfg["train_crop"][0] if split == "train" else icfg["eval_crop"][0])
         self.window = int(ucfg["window_size"])
+        self.sr = float(ucfg["sampling_rate"])
         self.corr_img_cfg = cfg["corruption"]["image"]
         self.corr_imu_cfg = cfg["corruption"]["imu"]
 
@@ -120,7 +121,7 @@ class PairedNoisyCleanDataset(Dataset):
             _stable_seed(row["env"], row["traj"], row["frame_idx"], self.epoch)
         )
         img_noisy = corrupt_image(img_clean, rng, self.corr_img_cfg)
-        imu_noisy = corrupt_imu(imu_clean, rng, self.corr_imu_cfg)
+        imu_noisy = corrupt_imu(imu_clean, rng, self.corr_imu_cfg, sr=self.sr)
 
         return {
             "img_clean": torch.from_numpy(img_clean),

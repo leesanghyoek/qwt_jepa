@@ -32,14 +32,79 @@ data:
     test_envs:  [RetroOffice, WaterMillDay]
 
 corruption:                       # sinh on-the-fly, co seed; KHONG luu ban noisy
-  image: {gauss_std: [0.0, 0.08], blur_kernel: [0, 7], jpeg_q: [40, 95]}
-  imu:   {gauss_std: [0.0, 0.05], bias: [0.0, 0.03], drift: [0.0, 0.02], spike_prob: 0.01}
+  # Profile: DRONE / UAV, camera + IMU 100 Hz. Muc tieu: khu mo + khu nhieu cho robot that.
+  # TartanAir la anh SACH nen nhieu chinh la thu tao ra bai toan -> moi hang so trong
+  # corruption.py deu duoc BOC NGAU NHIEN theo sample (pha Bayer, pha luoi JPEG, tam
+  # vignette, so lan loc mau, co hat chroma, ti le tron rung, so hoa ba, he so spike,
+  # buoc ADC) de model khong hoc thuoc mot phep bien doi co dinh roi dao nguoc.
+  image:
+    condition:     [0.10, 1.0]     # [san, tran] cua bien an 'dieu kien chup'. San 0.10
+                                   #   dam bao khong bao gio co dieu kien HOAN HAO -> khong
+                                   #   sinh ra cap (sach, gan nhu sach). Dat [0, 1] de tat.
+    couple:        0.70            # RANG BUOC do sang <-> do nhoe <-> muc nhieu qua mot
+                                   #   bien an 'dieu kien chup'. Camera thieu sang phai chon
+                                   #   phoi lau (nhoe) hoac tang ISO (nhieu), va van ra anh
+                                   #   toi -> ba thu di CUNG NHAU. 0 = doc lap nhu cu.
+    p_blur:        0.85            # de do dai quyet dinh: dieu kien tot -> length ~0 -> net
+    blur_kernel:   [0, 13]         # do dai motion blur (px), goc + quy dao ngau nhien
+    exposure:      [0.70, 1.10]    # THIEU ANH SANG NHE: da so anh toi di ~10% -> model phai hoc
+                                   #   TANG DO SANG, khong chi khu nhieu. Van chua ~12% anh
+                                   #   sang hon binh thuong de model phai UOC LUONG muc can
+                                   #   bu, thay vi hoc thuoc 'luon nhan len mot he so'.
+    p_illum:       0.60            # chieu sang KHONG DEU theo khong gian (den lech phia,
+    illum_depth:   [0.10, 0.45]    #   vat che bong) - vung toi nhat bi giam toi muc nay
+    p_vignette:    0.7
+    vignette:      [0.10, 0.35]    # lens shading; tam quang hoc LECH ngau nhien moi sample
+    bayer:         true            # pipeline RAW kieu Unprocessing (CVPR'19); pha CFA
+    wb_gains:      [1.2, 2.4]      #   (RGGB/GRBG/GBRG/BGGR) boc ngau nhien tung sample
+    shot_noise:    [0.02, 0.10]    # shot noise photon (sinh o mien RAW)
+    gauss_std:     [0.005, 0.030]  # read noise mach doc (sinh o mien RAW)
+    p_chroma:      0.5
+    chroma_noise:  [0.005, 0.016]  # dom mau tan so thap, co hat ngau nhien 8..32 px
+    chroma_denoise: [0, 2]         # so lan loc mau cua ISP, boc ngau nhien trong khoang
+    p_jpeg:        0.85
+    jpeg_q:        [45, 95]        # JPEG THAT; pha luoi 8x8 lech ngau nhien 0..7 px
+    severity_skew: 1.5
+  imu:
+    gauss_std:   [0.02, 0.07]      # white noise (angle/velocity random walk)
+    # --- KHONG DEU THEO THOI GIAN: chuoi that co luc yen, co luc nhieu han len ---
+    burst_amp:   [1.2, 4.0]        # "con nhieu" nhan them bien do (0 = tat, phang nhu cu)
+    burst_max:   3                 # so con toi da trong 1 cua so 1.28 s
+    p_step:      0.15              # xac suat co cu NHAY MUC giua cua so
+    step:        [0.08, 0.25]      # do lon cu nhay ngay luc vot len
+    step_tau:    [8.0, 40.0]       # hang so thoi gian HOI PHUC (so mau; 0.08-0.4 s)
+    step_resid:  [0.0, 0.35]       # phan lech con lai VINH VIEN sau khi hoi phuc
+    p_stuck:     0.12              # xac suat co doan gia tri bi treo (mat goi tin)
+    stuck_len:   [2, 8]            # dai doan treo (so mau)
+    p_bias:      0.25              # boc theo TUNG KENH: chi vai truc bi day lech han
+    bias:        [0.02, 0.08]      # turn-on bias NHE: nhieu chu yeu DAO DONG quanh duong
+                                   #   sach, khong keo ca duong roi khoi no
+    p_drift:     0.30
+    drift:       [0.03, 0.10]      # bias instability NHE: troi cham, bien do nho
+    p_spike:     0.30
+    spike_prob:  0.02
+    spike_gain:  [3.0, 8.0]        # bien do spike = gain * gauss_std (truoc day co dinh 5.0)
+    # --- RUNG: voi DRONE, nguon chinh la rotor NAM TREN Nyquist -> vao du lieu qua aliasing
+    p_vibration: 0.70              # rung trong bang: khung may + gimbal + gio giat
+    vibration:   [0.05, 0.18]
+    vib_freqs:   [12.0, 45.0]
+    vib_q:       9.0               # drone cong huong NHON hon robot mat dat
+    p_alias:     0.85              # rotor gan nhu LUON co -> xac suat cao
+    alias_amp:   [0.05, 0.20]      # va la thanh phan rung TROI NHAT tren drone
+    alias_freq:  [70.0, 280.0]     # RPM/60 * so canh; quad 4000-9000 RPM -> 67-300 Hz
+    scale_err:   [0.0, 0.02]       # sai so he so khuech dai
+    misalign:    [0.0, 0.01]       # lech truc / cross-axis coupling
+    vre:         [0.08, 0.25]      # vibration rectification: rung -> lech DC (da giam)
+    quant:       [0.001, 0.004]    # buoc luong tu ADC (khac nhau giua cac chip)
+    clip:        6.0               # bao hoa toan thang
+    severity_skew: 1.5
 
 model:
   d_model: 384
   encoder:   {depth: 12, heads: 6}
   predictor: {d_pred: 192, depth: 4, heads: 6}
-  token_patch_image: 8
+  token_patch_image: 16           # 8 -> 16: token anh 1024 -> 256. Truoc day 60% token nam
+                                  #   o muc 1 (SNR ~0 dB) - dung thang bi nhieu vui nang nhat.
   cross_modal_masking: true
 
 masking:
