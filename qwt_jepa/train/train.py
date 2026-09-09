@@ -24,7 +24,7 @@ if str(_ROOT) not in sys.path:
 from qwt_jepa.data.dataset import PairedNoisyCleanDataset, jepa_collate   # noqa: E402
 from qwt_jepa.data.normalize import ImuNormalizer                        # noqa: E402
 from qwt_jepa.models.jepa import QwtJepa                                  # noqa: E402
-from qwt_jepa.train.engine import evaluate, train_one_epoch              # noqa: E402
+from qwt_jepa.train.engine import evaluate, make_scaler, train_one_epoch  # noqa: E402
 
 
 def build_loaders(cfg: dict, normalizer: ImuNormalizer):
@@ -134,6 +134,7 @@ def main() -> None:
     total_steps = cfg["train"]["epochs"] * steps_per_epoch
     scheduler = build_scheduler(optimizer, cfg, total_steps)
 
+    scaler = make_scaler(cfg, device)
     start_epoch, step = 0, 0
     best = -math.inf if es_mode == "max" else math.inf
     es_bad = 0
@@ -142,6 +143,8 @@ def main() -> None:
         model.load_state_dict(ck["model"])
         optimizer.load_state_dict(ck["optimizer"])
         scheduler.load_state_dict(ck["scheduler"])
+        if ck.get("scaler") is not None:
+            scaler.load_state_dict(ck["scaler"])
         start_epoch, step = ck["epoch"] + 1, ck["step"]
         best = ck.get("best", best)
         es_bad = int(ck.get("es_bad", 0))
@@ -169,7 +172,7 @@ def main() -> None:
             loader = _Cut()
 
         step = train_one_epoch(
-            model, loader, optimizer, scheduler, cfg, device, step, total_steps, epoch
+            model, loader, optimizer, scheduler, cfg, device, step, total_steps, epoch, scaler
         )
         metrics = evaluate(model, val_loader, cfg, device, max_batches=lim_val)
         print(
@@ -189,6 +192,7 @@ def main() -> None:
             "model": model.state_dict(),
             "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(),
+            "scaler": scaler.state_dict() if scaler.is_enabled() else None,
             "epoch": epoch,
             "step": step,
             "best": best,

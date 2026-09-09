@@ -27,6 +27,18 @@ def _autocast(cfg: dict, device: torch.device):
     return torch.autocast("cpu", enabled=False)
 
 
+def make_scaler(cfg: dict, device: torch.device):
+    """GradScaler CHI can cho fp16.
+
+    fp16 co dai so mu rat hep: gradient nho hon ~6e-5 bi lam tron ve 0 (underflow) va
+    lop do ngung hoc am tham - khong bao loi gi. GradScaler nhan loss len truoc khi
+    backward roi chia lai, keo gradient ve vung bieu dien duoc.
+    bf16 co dai so mu bang fp32 nen KHONG can scaler.
+    """
+    on = device.type == "cuda" and str(cfg["train"].get("amp", "none")).lower() in ("fp16", "float16")
+    return torch.amp.GradScaler("cuda", enabled=on)
+
+
 def train_one_epoch(
     model,
     loader,
@@ -37,6 +49,7 @@ def train_one_epoch(
     step: int,
     total_steps: int,
     epoch: int,
+    scaler=None,
 ) -> int:
     model.train()
     lam = cfg["train"]["loss"]
@@ -53,10 +66,18 @@ def train_one_epoch(
             loss, logs = total_loss(out, batch, lam["lambda_img"], lam["lambda_imu"])
 
         optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        if grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-        optimizer.step()
+        if scaler is not None and scaler.is_enabled():
+            scaler.scale(loss).backward()
+            if grad_clip > 0:
+                scaler.unscale_(optimizer)     # phai go scale TRUOC khi clip theo norm
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            optimizer.step()
         scheduler.step()
 
         m = ema_momentum(step, total_steps, ema_cfg["start"], ema_cfg["end"])

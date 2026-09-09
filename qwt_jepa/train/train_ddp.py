@@ -44,6 +44,7 @@ from qwt_jepa.data.normalize import ImuNormalizer                        # noqa:
 from qwt_jepa.models.jepa import QwtJepa                                  # noqa: E402
 from qwt_jepa.train import ema_momentum                                   # noqa: E402
 from qwt_jepa.train.losses import total_loss                             # noqa: E402
+from qwt_jepa.train.engine import make_scaler                            # noqa: E402
 from qwt_jepa.train.train import _improved, build_scheduler             # noqa: E402
 
 
@@ -158,6 +159,7 @@ def main() -> None:
     total_steps = cfg["train"]["epochs"] * steps_per_epoch
     scheduler = build_scheduler(optimizer, cfg, total_steps)
 
+    scaler = make_scaler(cfg, device)
     start_epoch, step = 0, 0
     best = -math.inf if es_mode == "max" else math.inf
     es_bad = 0
@@ -166,6 +168,8 @@ def main() -> None:
         core.load_state_dict(ck["model"])
         optimizer.load_state_dict(ck["optimizer"])
         scheduler.load_state_dict(ck["scheduler"])
+        if ck.get("scaler") is not None:
+            scaler.load_state_dict(ck["scaler"])
         start_epoch, step = ck["epoch"] + 1, ck["step"]
         best = ck.get("best", best)
         es_bad = int(ck.get("es_bad", 0))
@@ -258,10 +262,18 @@ def main() -> None:
                 loss, logs = total_loss(out, batch, lam["lambda_img"], lam["lambda_imu"])
 
             optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            if grad_clip > 0:
-                torch.nn.utils.clip_grad_norm_(core.parameters(), grad_clip)
-            optimizer.step()
+            if scaler.is_enabled():
+                scaler.scale(loss).backward()
+                if grad_clip > 0:
+                    scaler.unscale_(optimizer)   # go scale TRUOC khi clip theo norm
+                    torch.nn.utils.clip_grad_norm_(core.parameters(), grad_clip)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                if grad_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(core.parameters(), grad_clip)
+                optimizer.step()
             scheduler.step()
 
             m = ema_momentum(step, total_steps, ema_cfg["start"], ema_cfg["end"])
@@ -301,6 +313,7 @@ def main() -> None:
                 "model": core.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
+                "scaler": scaler.state_dict() if scaler.is_enabled() else None,
                 "epoch": epoch,
                 "step": step,
                 "best": best,

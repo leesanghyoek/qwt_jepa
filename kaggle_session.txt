@@ -257,8 +257,13 @@ if ns is None:
 else:
     base["data"]["norm_stats"] = str(ns)
 
-# amp: giu 'bf16' (khong can GradScaler). P100/T4 khong co bf16 phan cung nhung
-# van chay dung, chi khong nhanh hon fp32. Muon chac chan toc do: doi 'none'.
+# AMP LA NUT TOC DO LON NHAT: do tren RTX 4060, batch 32, 512 token
+#     amp=none  539 ms/buoc   59 sample/s   3.10 GB
+#     amp=bf16  188 ms/buoc  170 sample/s   2.05 GB   <- 2.9x nhanh hon
+#     amp=fp16  175 ms/buoc  183 sample/s   2.05 GB
+# NHUNG bf16 chi co tensor core tu Ampere tro len. P100 (Pascal) va T4 (Turing) KHONG
+# co -> bf16 bi mo phong, khong nhanh hon fp32. Tren Kaggle phai dung fp16:
+base["train"]["amp"] = "fp16"     # T4 / P100. Neu duoc cap GPU Ampere+ thi de "bf16".
 pathlib.Path("qwt_jepa/configs/kaggle.yaml").write_text(yaml.safe_dump(base, sort_keys=False))
 print("ok kaggle.yaml")
 print("  data.root  :", base["data"]["root"])
@@ -272,11 +277,18 @@ print("  norm_stats :", base["data"]["norm_stats"])
     --batch-size 32 --epochs 1 --limit-train-batches 10 --num-workers 4
 
 # ---- Cell B4 : train that ---------------------------------------------------
-# Lan dau (khong resume). token_patch_image da doi 8 -> 16 nen so token giam 1280 -> 512,
-# VRAM nhe hon nhieu: P100/T4 chay duoc batch 48-64. Neu OOM ha ve 32.
+# Lan dau (khong resume).
+# BATCH SIZE: thong luong BAO HOA o batch 32 (do tren RTX 4060, amp bf16):
+#     batch 8  -> 20.9 ms/sample | batch 32 -> 16.6 | batch 64 -> 16.0
+# Tang batch len 64 chi nhanh them ~4% nhung GIAM MOT NUA so lan cap nhat gradient
+# tren moi sample. Dung 32. VRAM chi 2.05 GB voi amp nen 16GB cua P100/T4 rat thoai mai.
+# LUU Y: total_steps = epochs * limit_train_batches, KHONG phu thuoc batch_size. Doi
+# batch_size thi phai chinh lr theo ti le tuyen tinh (batch x2 -> lr x2).
 # KHONG con chay het 2600 batch/epoch: base.yaml da dat train.limit_train_batches
 # (mac dinh 500) + train.limit_val_batches (100) + train.early_stop (patience 6 tren
-# val L_jepa). Epoch ngan hon ~5x -> ~1-2 phut/epoch. Bo --epochs de dung epochs=40
+# val L_jepa). Uoc tinh tren Kaggle (4 vCPU nen dataloader la nut co chai, ~130 sample/s):
+#   500 batch x 32 = 16000 sample/epoch -> ~2 phut train + ~25s eval = ~2.5 phut/epoch
+#   40 epoch  ->  ~1.7 gio, gon trong 1 phien 12h. Bo --epochs de dung epochs=40
 # trong config (tran cung); early_stop thuong dung truoc do.
 # Muon epoch dai/ngan hon: sua train.limit_train_batches trong Cell B2 hoac
 #   base["train"]["limit_train_batches"] = 800   truoc khi ghi kaggle.yaml.
