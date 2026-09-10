@@ -18,7 +18,7 @@ import torch.nn as nn
 from ..qwt.image_qwt import image_iqwt
 from ..qwt.imu_qwt import imu_iqwt
 from .layout import TokenLayout
-from .tokenizer import unpatchify
+from .tokenizer import patchify, unpatchify
 
 
 def _pad_w0_img(v: torch.Tensor) -> torch.Tensor:
@@ -40,7 +40,18 @@ class ImageHead(nn.Module):
         self.p = layout.patch
         self.levels = layout.levels_image
         self.shapes = layout.image_shapes
-        self.proj = nn.Linear(d_model, 3 * self.p * self.p)
+        # skip: noi HE SO QWT THO (da chuan hoa) cua chinh dai do vao dau vao head.
+        # Chi tiet min khong phai song sot qua 12 lop attention toan cuc nua.
+        # PHAI la he so tho chu KHONG phai dau ra tokenizer: tokenizer la
+        # Linear(3*p*p -> d_model) = nen 768 xuong 384, da mat mot nua thong tin,
+        # nen noi no vao thi head van khong the dung lai anh dau vao.
+        # Voi he so tho thi nghiem tam thuong la "copy anh nhieu" (~21.99 dB tren du
+        # lieu Kaggle) - cao hon han cho model dang dung - va loss day tiep tu do len.
+        self.skip = bool(cfg["model"].get("recon_skip", True)) and bool(
+            cfg["model"].get("recon_from_full", True)
+        )
+        d_patch = 3 * self.p * self.p
+        self.proj = nn.Linear(d_model + (d_patch if self.skip else 0), d_patch)
         # Doi xung voi Tokenizer: head du doan he so DA CHUAN HOA roi nhan lai scale.
         self.register_buffer("band_scale", torch.ones(len(layout.image_entries)))
 
@@ -49,12 +60,17 @@ class ImageHead(nn.Module):
         emb_full: torch.Tensor,
         layout: TokenLayout,
         bands_out: dict | None = None,
+        skip_qwt: dict | None = None,
     ) -> torch.Tensor:
         """`bands_out` (tuy chon): nhan he so DA CHUAN HOA cua tung dai, de tinh
-        loss can bang giua cac dai (xem losses.band_balanced_loss)."""
+        loss can bang giua cac dai (xem losses.band_balanced_loss).
+        `skip_qwt` (tuy chon): thap QWT cua dau vao NHIEU, noi vao lam skip."""
         pyr: dict = {"levels": self.levels}
         for i, e in enumerate(layout.image_entries):
             tok = emb_full[:, e.start:e.end]                      # [B, gh*gw, d]
+            if skip_qwt is not None:
+                raw = skip_qwt[e.level][e.band][:, 1:4] / self.band_scale[i]
+                tok = torch.cat([tok, patchify(raw, e.gh, e.gw, self.p)], dim=-1)
             norm = self.proj(tok)                                 # he so da chuan hoa
             if bands_out is not None:
                 bands_out[(e.level, e.band)] = norm
@@ -71,7 +87,10 @@ class ImuHead(nn.Module):
         d_model = int(cfg["model"]["d_model"])
         self.levels = layout.levels_imu
         self.lens = layout.imu_shapes
-        self.proj = nn.Linear(d_model, 3)
+        self.skip = bool(cfg["model"].get("recon_skip", True)) and bool(
+            cfg["model"].get("recon_from_full", True)
+        )
+        self.proj = nn.Linear(d_model + (3 if self.skip else 0), 3)
         self.register_buffer("band_scale", torch.ones(len(layout.imu_entries)))
 
     def forward(
@@ -79,6 +98,7 @@ class ImuHead(nn.Module):
         emb_full: torch.Tensor,
         layout: TokenLayout,
         bands_out: dict | None = None,
+        skip_qwt: dict | None = None,
     ) -> torch.Tensor:
         coeffs: dict = {
             "acc": {"levels": self.levels},
@@ -86,6 +106,9 @@ class ImuHead(nn.Module):
         }
         for i, e in enumerate(layout.imu_entries):
             tok = emb_full[:, e.start:e.end]              # [B, L, d]
+            if skip_qwt is not None:
+                raw = skip_qwt[e.group][e.level][e.band][:, :, 1:4] / self.band_scale[i]
+                tok = torch.cat([tok, raw], dim=-1)
             norm = self.proj(tok)                         # he so da chuan hoa
             if bands_out is not None:
                 bands_out[(e.group, e.level, e.band)] = norm

@@ -254,3 +254,61 @@ Encoder chạy 2 lần thay vì 1. Throughput ~60 → ~38 im/s. Một run 40 epo
 lên ~5,5h — vẫn gọn trong một phiên Kaggle 12h.
 
 Số tham số **không đổi**.
+
+
+---
+
+## 8. Skip connection cho recon head
+
+Sau khi tách hai lượt, ảnh vẫn mờ. Nguyên nhân không nằm ở việc tách lượt mà ở **decoder**:
+
+```
+ảnh 196 608 số  ←  1 lớp nn.Linear  ←  12 lớp attention toàn cục
+```
+
+Hai thứ chồng nhau:
+
+1. **JEPA cố tình vứt chi tiết.** Học biểu diễn ẩn là để giữ cái trừu tượng, bỏ cái
+   vụn vặt. Bắt chính biểu diễn đó dựng lại từng pixel là đi ngược mục tiêu của nó.
+2. **Decoder chỉ một lớp tuyến tính.** MAE — kiến trúc chuyên tái tạo pixel — dùng
+   decoder 8 lớp transformer.
+
+Cách sửa: nối **hệ số QWT thô** (đã chuẩn hoá) của chính dải đó vào đầu vào head.
+
+```python
+tok = emb[:, e.start:e.end]                                  # [B, n, 384]
+raw = skip_qwt[e.level][e.band][:, 1:4] / band_scale[i]
+tok = cat([tok, patchify(raw)], dim=-1)                      # [B, n, 384+768]
+norm = self.proj(tok)                                        # Linear(1152 → 768)
+```
+
+### Phải là hệ số THÔ, không phải đầu ra tokenizer
+
+Đây là chỗ dễ sai. `tokenizer.image_proj` là `Linear(768 → 384)` — **nén 2:1, mất một
+nửa thông tin**. Nối đầu ra tokenizer vào thì head vẫn không dựng lại được ảnh đầu vào.
+Phải nối hệ số thô 768 chiều.
+
+### Kiểm chứng: sàn là có thật
+
+Đặt tay trọng số head thành phép đồng nhất trên phần skip (bỏ qua phần embedding):
+
+```
+PSNR(head đặt tay = đồng nhất) : 16.666 dB
+PSNR(ảnh nhiễu đầu vào)        : 16.666 dB   ← trùng khít
+RMSE acc(đặt tay)              : 0.1109
+RMSE acc(imu nhiễu đầu vào)    : 0.1109   ← trùng khít
+```
+
+Nghĩa là "copy đầu vào" nằm trong không gian nghiệm của head. Trên dữ liệu Kaggle sàn
+đó là **21.99 dB** — cao hơn hẳn chỗ model đang đứng (~16.6 dB). Loss sẽ đẩy nó cải
+thiện từ sàn lên, thay vì mò từ dưới lên như hiện nay.
+
+### Cái giá
+
+Tham số 24.12M → **24.71M** (+0.59M). Bật/tắt bằng `model.recon_skip`.
+
+### Rủi ro cần theo dõi
+
+Head giờ có thể đạt `L_img` thấp bằng cách copy đầu vào, nên loss tái tạo bớt vai trò
+ép encoder mã hoá nội dung ảnh. Phải theo dõi `z_std` và tỉ số `L_jepa/pos` — nếu chúng
+xấu đi thì phải tăng `lambda_var`.

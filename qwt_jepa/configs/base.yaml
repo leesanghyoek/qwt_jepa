@@ -103,6 +103,12 @@ model:
   d_model: 384
   encoder:   {depth: 12, heads: 6}
   predictor: {d_pred: 192, depth: 4, heads: 6}
+  recon_skip: true                # Noi dac trung tokenizer (CHUA qua encoder) vao dau vao
+                                  #   recon head. Chi tiet min khong phai song sot qua 12 lop
+                                  #   attention toan cuc nua. Nghiem tam thuong tro thanh
+                                  #   "copy anh nhieu" (~21.99 dB tren du lieu Kaggle) thay vi
+                                  #   phai mo tu 0 - day la SAN moi, cao hon cho model dang
+                                  #   dung (~16.6 dB). Chi co tac dung khi recon_from_full.
   recon_from_full: true           # Recon head doc bieu dien cua TOAN BO token (luot rieng,
                                   #   CUNG context_encoder, khong phai model thu hai) thay vi
                                   #   doc emb_full da bi che 70%. Xem KIEN_TRUC_MODEL.md muc 7.

@@ -56,6 +56,28 @@ class QwtJepa(nn.Module):
 
         self.levels_image = int(cfg["data"]["image"]["qwt_levels"])
         self.levels_imu = int(cfg["data"]["imu"]["qwt_levels"])
+        self.recon_from_full = bool(cfg["model"].get("recon_from_full", True))
+        self.recon_skip = bool(cfg["model"].get("recon_skip", True)) and self.recon_from_full
+
+    # ------------------------------------------------------------------ #
+    def _heads(self, emb, q_img, q_imu, img_bands=None, imu_bands=None):
+        """Chay hai recon head. Thap QWT NHIEU duoc noi vao lam skip connection."""
+        si, su = (q_img, q_imu) if self.recon_skip else (None, None)
+        return (
+            self.image_head(emb, self.layout, img_bands, si),
+            self.imu_head(emb, self.layout, imu_bands, su),
+        )
+
+    def reconstruct(self, img_noisy: torch.Tensor, imu_noisy: torch.Tensor):
+        """DUONG TRIEN KHAI: toan bo token nhieu -> encoder -> 2 head.
+
+        Khong che gi, khong dung predictor, khong dung missing_token. Day la duong
+        DUY NHAT nen dung khi danh gia hoac trien khai - dung tu ghep lai, vi no
+        phai khop chinh xac voi nhanh tai tao luc train (ke ca skip connection).
+        """
+        q_img, q_imu = self._qwt_all(img_noisy, imu_noisy)
+        tok = self.tokenizer(q_img, q_imu)
+        return self._heads(self.context_encoder(tok), q_img, q_imu)
 
     # ------------------------------------------------------------------ #
     @torch.no_grad()
@@ -159,12 +181,11 @@ class QwtJepa(nn.Module):
         # token target -> L_jepa thanh gian lan.
         img_bands: dict = {}
         imu_bands: dict = {}
-        if bool(self.cfg["model"].get("recon_from_full", True)):
+        if self.recon_from_full:
             emb_rec = self.context_encoder(tok_c)                    # [B, 512, d]
         else:
             emb_rec = self._assemble_full(z_ctx, z_pred, mask, b)    # duong cu
-        img_rec = self.image_head(emb_rec, self.layout, img_bands)   # [B, 3, H, W]
-        imu_rec = self.imu_head(emb_rec, self.layout, imu_bands)     # [B, T, 6]
+        img_rec, imu_rec = self._heads(emb_rec, q_img_n, q_imu_n, img_bands, imu_bands)
         with torch.no_grad():
             img_bands_tgt = self._clean_bands_img(q_img_c)
             imu_bands_tgt = self._clean_bands_imu(q_imu_c)
