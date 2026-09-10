@@ -191,3 +191,26 @@ def test_band_scale_nap_cho_ca_nhanh_target_va_head():
         (model.imu_head.band_scale, 3.0, n_imu),
     ):
         assert buf.shape == (n,) and torch.allclose(buf, torch.full((n,), want))
+
+
+def test_head_co_cong_khoi_tao_bang_phep_copy():
+    """Voi recon_gate, model luc KHOI TAO phai tra ve DUNG dau vao nhieu.
+
+    Do la san: model bat dau ngay tai muc "copy anh nhieu" (~21.99 dB tren du lieu
+    Kaggle) va chi co the di len, thay vi mo tu 0. Gradient van phai chay duoc.
+    """
+    cfg = _cfg()
+    if not cfg["model"].get("recon_gate", True):
+        return
+    model = QwtJepa(cfg)
+    model.eval()
+    b = _batch(cfg, b=2)
+
+    with torch.no_grad():
+        img, imu = model.reconstruct(b["img_noisy"], b["imu_noisy"])
+    assert torch.allclose(img, b["img_noisy"], atol=1e-4), "anh ra phai bang anh vao"
+    assert torch.allclose(imu, b["imu_noisy"], atol=1e-4), "imu ra phai bang imu vao"
+
+    img, imu = model.reconstruct(b["img_noisy"], b["imu_noisy"])
+    (img.abs().mean() + imu.abs().mean()).backward()
+    assert model.image_head.proj.weight.grad.norm() > 0, "khoi tao 0 nhung van phai hoc duoc"

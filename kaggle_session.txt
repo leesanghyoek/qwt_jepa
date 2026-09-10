@@ -381,20 +381,39 @@ def draw(done=False):
     print("\n".join(tail))
     print(f"\nlog day du: {LOGFILE}" + ("   [DA XONG]" if done else ""))
 
-with open(LOGFILE, "w") as lf:
-    proc = subprocess.Popen(CMD, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, bufsize=1)
-    for line in proc.stdout:
-        line = line.rstrip()
-        lf.write(line + "\n"); lf.flush()      # flush de xem duoc log ngay ca khi notebook chet
-        tail.append(line)
-        if any(k in line for k in KEY):
-            marks.append(line)
-        if time.time() - last > REFRESH_S:
-            draw(); last = time.time()
-    proc.wait()
+# QUAN TRONG: phai boc try/finally va GIET tien trinh con.
+# Neu khong: bam Stop o notebook chi nem KeyboardInterrupt vao Python cua notebook,
+# con `proc` (train.py) VAN CHAY NEN va giu VRAM. Chay lai cell luc do sinh ra tien
+# trinh THU HAI, hai ban tranh GPU, cham nhu ru va co the OOM. Dau hieu: log in ra
+# hai lan "QwtJepa: ... params train", hoac nvidia-smi thay hai tien trinh python.
+proc = None
+try:
+    with open(LOGFILE, "w") as lf:
+        proc = subprocess.Popen(CMD, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, bufsize=1)
+        for line in proc.stdout:
+            line = line.rstrip()
+            lf.write(line + "\n"); lf.flush()  # flush de xem duoc log ngay ca khi notebook chet
+            tail.append(line)
+            if any(k in line for k in KEY):
+                marks.append(line)
+            if time.time() - last > REFRESH_S:
+                draw(); last = time.time()
+        proc.wait()
+finally:
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill(); proc.wait()
+        print("\n[da dung tien trinh train]")
 draw(done=True)
-print("ma thoat:", proc.returncode)
+print("ma thoat:", proc.returncode if proc else "?")
+
+# Neu lo de sot tien trinh mo coi (chay lai cell ma van thay cham / OOM):
+#   !nvidia-smi
+#   !pkill -f "qwt_jepa/train/train.py" ; sleep 3 ; nvidia-smi
 
 # Muon xem lai toan bo log sau do:
 #   !tail -100 /kaggle/working/train.log

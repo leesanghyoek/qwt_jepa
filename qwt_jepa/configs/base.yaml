@@ -103,7 +103,12 @@ model:
   d_model: 384
   encoder:   {depth: 12, heads: 6}
   predictor: {d_pred: 192, depth: 4, heads: 6}
-  recon_skip: true                # Noi dac trung tokenizer (CHUA qua encoder) vao dau vao
+  recon_gate: true                # Head xuat HE SO NHAN cho he so nhieu (w*(1+gate)+delta)
+                                  #   thay vi chi cong. Khu nhieu wavelet la phep CO he so -
+                                  #   mot phep NHAN - ma mot lop Linear khong bieu dien noi.
+                                  #   Khoi tao 0 => dau ra bat dau DUNG BANG anh nhieu.
+                                  #   Chi co tac dung khi recon_skip.
+  recon_skip: true                # Noi HE SO QWT THO (chua qua encoder) vao dau vao
                                   #   recon head. Chi tiet min khong phai song sot qua 12 lop
                                   #   attention toan cuc nua. Nghiem tam thuong tro thanh
                                   #   "copy anh nhieu" (~21.99 dB tren du lieu Kaggle) thay vi

@@ -51,7 +51,27 @@ class ImageHead(nn.Module):
             cfg["model"].get("recon_from_full", True)
         )
         d_patch = 3 * self.p * self.p
-        self.proj = nn.Linear(d_model + (d_patch if self.skip else 0), d_patch)
+        # gate: head xuat HE SO NHAN cho he so nhieu thay vi chi cong them.
+        # Khu nhieu wavelet ve ban chat la CO he so: w_hat = w * g(w, ngu canh) - mot
+        # phep NHAN phu thuoc du lieu. Mot lop Linear chi cong duoc, khong nhan duoc,
+        # nen khong bieu dien noi phep co. Va vi self.proj dung chung cho ca 10 dai
+        # anh, duong di cua he so tho la MOT ma tran duy nhat - khong the cho L1 HH
+        # he so 0.3 con L3 LL he so 1.05.
+        # Do tran PSNR tren du lieu that (24 mau valid):
+        #   copy nguyen anh nhieu                 19.51 dB
+        #   1 he so nhan / moi dai                20.66 dB  (+1.15)
+        #   1 he so nhan / moi TOKEN              21.82 dB  (+2.31)
+        # KHONG dung sigmoid: 44% sai so nam o dai L3 LL la thieu sang, can cho phep
+        # he so LON HON 1 de tang sang.
+        self.gate = bool(cfg["model"].get("recon_gate", True)) and self.skip
+        self.proj = nn.Linear(
+            d_model + (d_patch if self.skip else 0), d_patch * (2 if self.gate else 1)
+        )
+        if self.gate:
+            # khoi tao 0 => gate=0, delta=0 => dau ra DUNG BANG anh nhieu.
+            # Model bat dau ngay tai san va chi co the di len.
+            nn.init.zeros_(self.proj.weight)
+            nn.init.zeros_(self.proj.bias)
         # Doi xung voi Tokenizer: head du doan he so DA CHUAN HOA roi nhan lai scale.
         self.register_buffer("band_scale", torch.ones(len(layout.image_entries)))
 
@@ -68,10 +88,15 @@ class ImageHead(nn.Module):
         pyr: dict = {"levels": self.levels}
         for i, e in enumerate(layout.image_entries):
             tok = emb_full[:, e.start:e.end]                      # [B, gh*gw, d]
+            raw_p = None
             if skip_qwt is not None:
                 raw = skip_qwt[e.level][e.band][:, 1:4] / self.band_scale[i]
-                tok = torch.cat([tok, patchify(raw, e.gh, e.gw, self.p)], dim=-1)
+                raw_p = patchify(raw, e.gh, e.gw, self.p)
+                tok = torch.cat([tok, raw_p], dim=-1)
             norm = self.proj(tok)                                 # he so da chuan hoa
+            if self.gate:
+                g, d = norm.chunk(2, dim=-1)
+                norm = raw_p * (1.0 + g) + d
             if bands_out is not None:
                 bands_out[(e.level, e.band)] = norm
             band = norm * self.band_scale[i]                      # [B, gh*gw, 3p^2]
@@ -90,7 +115,11 @@ class ImuHead(nn.Module):
         self.skip = bool(cfg["model"].get("recon_skip", True)) and bool(
             cfg["model"].get("recon_from_full", True)
         )
-        self.proj = nn.Linear(d_model + (3 if self.skip else 0), 3)
+        self.gate = bool(cfg["model"].get("recon_gate", True)) and self.skip
+        self.proj = nn.Linear(d_model + (3 if self.skip else 0), 6 if self.gate else 3)
+        if self.gate:
+            nn.init.zeros_(self.proj.weight)
+            nn.init.zeros_(self.proj.bias)
         self.register_buffer("band_scale", torch.ones(len(layout.imu_entries)))
 
     def forward(
@@ -106,10 +135,14 @@ class ImuHead(nn.Module):
         }
         for i, e in enumerate(layout.imu_entries):
             tok = emb_full[:, e.start:e.end]              # [B, L, d]
+            raw = None
             if skip_qwt is not None:
                 raw = skip_qwt[e.group][e.level][e.band][:, :, 1:4] / self.band_scale[i]
                 tok = torch.cat([tok, raw], dim=-1)
             norm = self.proj(tok)                         # he so da chuan hoa
+            if self.gate:
+                g, d = norm.chunk(2, dim=-1)
+                norm = raw * (1.0 + g) + d
             if bands_out is not None:
                 bands_out[(e.group, e.level, e.band)] = norm
             v = _pad_w0_seq(norm * self.band_scale[i])    # [B, L, 4]

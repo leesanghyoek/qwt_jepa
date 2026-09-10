@@ -21,6 +21,17 @@ Chay:
     python -m qwt_jepa.scripts.eval_checkpoint --ckpt qwt_jepa/runs/base/best.pt \
         --split test --n 256 --by-env
 
+Tap sample: MAC DINH boc NGAU NHIEN (--sample random, seed moi moi lan chay), va truoc
+khi boc thi LOAI moi dong trung voi manifest train/valid - tuc la trung voi du lieu da
+chay tren Kaggle (--exclude-splits train,valid, doi chieu theo ca trajectory). Manifest
+chuan cua tartanair-v2-jepa da chia roi theo trajectory nen thuong loai 0 dong; buoc nay
+la luoi an toan, va no in ra so dong bi loai de kiem chung.
+
+    --sample balanced   ngau nhien nhung chia deu so sample cho moi environment
+    --sample stride     rai deu tat dinh (kieu cu, de so sanh lai dung cung tap)
+    --sample-seed 12345 chay lai y het mot lan truoc (seed cua lan do nam trong
+                        command.txt / summary.json / cot `sample` cua index.csv)
+
 Ket qua: MOI LAN CHAY tao mot thu muc con moi, ten la dau thoi gian luc chay,
 khong lan nao de len lan nao:
 
@@ -127,15 +138,108 @@ def merge_cfg(cfg_ck: dict, cfg_local: dict | None) -> dict:
     return cfg
 
 
-def build_dataset(cfg: dict, split: str, normalizer, epoch: int, n: int):
+def _manifest_keys(path: str | pathlib.Path, level: str) -> set[str]:
+    """Doc mot manifest -> tap khoa dung de doi chieu trung lap.
+
+    level="traj"   : ca trajectory (chat hon - hai frame lien tiep cung mot trajectory
+                     gan nhu la mot anh, tinh la trung).
+    level="sample" : dung tung frame.
+    """
+    keys: set[str] = set()
+    with open(path, newline="") as fh:
+        for r in csv.DictReader(fh):
+            traj = f'{r["environment"]}/{r["difficulty"]}/{r["trajectory"]}'
+            keys.add(traj if level == "traj"
+                     else f'{traj}#{int(r["sample_id"].rsplit("__", 1)[-1])}')
+    return keys
+
+
+def _row_key(row: dict, level: str) -> str:
+    """Cung dinh dang khoa nhu _manifest_keys, nhung tinh tu row cua dataset."""
+    return row["traj"] if level == "traj" else f'{row["traj"]}#{row["frame_idx"]}'
+
+
+def build_dataset(cfg: dict, split: str, normalizer, epoch: int, n: int,
+                  mode: str = "random", seed: int | None = None,
+                  exclude_splits: tuple[str, ...] = ("train", "valid"),
+                  exclude_level: str = "traj"):
+    """Boc <n> sample de eval, KHONG dinh vao du lieu model da nhin thay luc train.
+
+    Hai buoc, dung thu tu do:
+
+      1. LOC : moi dong co khoa trung voi manifest cua `exclude_splits` (train/valid -
+               nhung gi da chay tren Kaggle) bi vut truoc khi boc. Voi manifest chuan
+               cua tartanair-v2-jepa ba split da roi nhau theo trajectory nen thuong loc
+               0 dong; day la luoi an toan cho manifest tu che, hoac khi lan train tren
+               Kaggle chia split khac voi manifest dang co o may nay.
+      2. BOC : mode="random"   - ngau nhien deu tren toan bo phan con lai (mac dinh)
+               mode="balanced" - ngau nhien nhung chia deu so sample cho moi environment
+               mode="stride"   - rai deu theo chi so, tat dinh (kieu cu, de so sanh lai
+                                 dung cung tap voi cac lan chay truoc)
+
+    Tra ve (dataset da cat, tong so dong cua split, thong tin buoc boc).
+    """
     ds = PairedNoisyCleanDataset(
         cfg["data"]["manifest"][split], cfg["data"]["root"], cfg, split, normalizer, epoch
     )
-    if n and n < len(ds):
-        stride = len(ds) / n                       # rai deu ca split, khong lay don 1 env
-        idx = sorted({int(i * stride) for i in range(n)})
-        return Subset(ds, idx), len(ds)
-    return ds, len(ds)
+    n_total = len(ds)
+
+    banned: set[str] = set()
+    for s in exclude_splits:
+        if s == split:
+            continue
+        mpath = cfg["data"]["manifest"].get(s)
+        if not mpath or not pathlib.Path(mpath).exists():
+            print(f"[chu y] khong doc duoc manifest '{s}' ({mpath}) -> bo qua buoc chong "
+                  f"trung voi split nay.")
+            continue
+        banned |= _manifest_keys(mpath, exclude_level)
+
+    keep = [i for i, r in enumerate(ds.rows) if _row_key(r, exclude_level) not in banned]
+    n_drop = n_total - len(keep)
+    if not keep:
+        raise RuntimeError(
+            f"split '{split}' trung HOAN TOAN voi {list(exclude_splits)} theo "
+            f"{exclude_level} - khong con dong nao de eval."
+        )
+
+    rng = np.random.default_rng(seed)
+    if not n or n >= len(keep):
+        idx = list(keep)
+    elif mode == "stride":
+        stride = len(keep) / n
+        idx = [keep[int(i * stride)] for i in range(n)]
+    elif mode == "balanced":
+        by_env: dict[str, list[int]] = {}
+        for i in keep:
+            by_env.setdefault(ds.rows[i]["env"], []).append(i)
+        envs = sorted(by_env)
+        quota = {e: n // len(envs) for e in envs}
+        for e in envs[: n % len(envs)]:            # chia phan du cho vai env dau
+            quota[e] += 1
+        idx = []
+        for e in envs:
+            pool = by_env[e]
+            k = min(quota[e], len(pool))
+            idx += [int(i) for i in rng.choice(pool, size=k, replace=False)]
+        if len(idx) < n:                           # env nao do it dong hon quota -> bu them
+            rest = [i for i in keep if i not in set(idx)]
+            k = min(n - len(idx), len(rest))
+            idx += [int(i) for i in rng.choice(rest, size=k, replace=False)]
+    else:
+        idx = [int(i) for i in rng.choice(keep, size=n, replace=False)]
+
+    idx = sorted(set(idx))
+    info = {
+        "mode": mode,
+        "seed": seed,
+        "n_split_rows": n_total,
+        "n_eligible": len(keep),
+        "n_excluded": n_drop,
+        "exclude_splits": list(exclude_splits),
+        "exclude_level": exclude_level,
+    }
+    return Subset(ds, idx), n_total, info
 
 
 # --------------------------------------------------------------------------- #
@@ -427,11 +531,22 @@ def save_figs(rows, ds, model, cfg, device, save_dir: pathlib.Path, k: int) -> N
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", default=str(pathlib.Path.home() / "Downloads" / "best6.pt"))
+    ap.add_argument("--ckpt", default=str(pathlib.Path.home() / "Downloads" / "best14.pt"))
     ap.add_argument("--config", default=str(_ROOT / "qwt_jepa" / "configs" / "base.yaml"),
                     help="chi lay duong dan du lieu; kien truc luon theo checkpoint")
     ap.add_argument("--split", default="test", choices=["train", "valid", "test"])
-    ap.add_argument("--n", type=int, default=256, help="so sample rai deu split (0 = full)")
+    ap.add_argument("--n", type=int, default=256, help="so sample lay tu split (0 = full)")
+    ap.add_argument("--sample", default="random", choices=["random", "balanced", "stride"],
+                    help="random = boc ngau nhien (mac dinh); balanced = ngau nhien nhung "
+                         "chia deu cho moi environment; stride = rai deu tat dinh (kieu cu)")
+    ap.add_argument("--sample-seed", type=int, default=-1,
+                    help="seed boc mau; -1 = moi lan chay mot tap khac. Seed thuc su dung "
+                         "duoc ghi vao command.txt/summary.json de chay lai y het")
+    ap.add_argument("--exclude-splits", default="train,valid",
+                    help="cac split model DA nhin thay luc train -> loai khoi tap eval "
+                         "truoc khi boc. '' = tat luoi chong trung")
+    ap.add_argument("--exclude-level", default="traj", choices=["traj", "sample"],
+                    help="doi chieu trung theo ca trajectory (chat, mac dinh) hay tung frame")
     ap.add_argument("--batch-size", type=int, default=8)
     ap.add_argument("--num-workers", type=int, default=4)
     ap.add_argument("--epoch-seed", type=int, default=0, help="seed corruption (nhu set_epoch)")
@@ -448,6 +563,11 @@ def main() -> None:
     ckpt_path = pathlib.Path(args.ckpt)
     if not ckpt_path.exists():
         sys.exit(f"khong thay checkpoint: {ckpt_path}")
+    # -1 = ngau nhien that. Chot seed NGAY BAY GIO va ghi lai, de mot lan chay bat ky
+    # van lap lai duoc y nguyen tap sample da dung (--sample-seed <so da ghi>).
+    sample_seed = (int(np.random.SeedSequence().entropy % (2**31))
+                   if args.sample_seed < 0 else args.sample_seed)
+    exclude_splits = tuple(x.strip() for x in args.exclude_splits.split(",") if x.strip())
     # Moi lan chay = mot thu muc con moi, ten la dau thoi gian luc chay. Khong lan nao
     # de len lan nao, nen so sanh duoc cac checkpoint / cac lan sua code voi nhau.
     started = time.localtime()
@@ -470,6 +590,7 @@ def main() -> None:
         f"{time.strftime('%Y-%m-%d %H:%M:%S', started)}\n"
         f"{sys.executable} -m qwt_jepa.scripts.eval_checkpoint "
         + " ".join(sys.argv[1:]) + "\n"
+        f"# chay lai dung tap sample nay: --sample {args.sample} --sample-seed {sample_seed}\n"
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -496,13 +617,25 @@ def main() -> None:
         normalizer = ImuNormalizer.from_yaml(cfg["data"]["norm_stats"])
         print(f"norm stats : {cfg['data']['norm_stats']}")
 
-    ds, n_total = build_dataset(cfg, args.split, normalizer, args.epoch_seed, args.n)
+    ds, n_total, samp = build_dataset(
+        cfg, args.split, normalizer, args.epoch_seed, args.n,
+        mode=args.sample, seed=sample_seed,
+        exclude_splits=exclude_splits, exclude_level=args.exclude_level,
+    )
     loader = DataLoader(
         ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers,
         pin_memory=True, collate_fn=jepa_collate,
     )
-    print(f"du lieu    : {args.split} - {len(ds)}/{n_total} sample "
-          f"| root {cfg['data']['root']}")
+    print(f"du lieu    : {args.split} - {len(ds)}/{samp['n_eligible']} sample du dieu kien "
+          f"(split co {n_total}) | root {cfg['data']['root']}")
+    print(f"boc mau    : {samp['mode']} | seed {sample_seed} | loai trung voi "
+          f"{exclude_splits if exclude_splits else '(tat)'} theo {args.exclude_level} "
+          f"-> vut {samp['n_excluded']} dong")
+    # Manifest chuan chia theo trajectory, nen cung mot environment van xuat hien o ca
+    # train lan test. Noi ro de khong doc nham ket qua thanh "moi truong hoan toan la".
+    if not cfg["data"].get("split", {}).get("enforce_env_split", False):
+        print("             (split theo TRAJECTORY: trajectory khong trung train, nhung "
+              "environment thi co - dat enforce_env_split=true neu muon env la hoan toan)")
 
     model = QwtJepa(cfg).to(device)
     missing, unexpected = model.load_state_dict(ck["model"], strict=False)
@@ -599,6 +732,7 @@ def main() -> None:
         "ckpt": str(ckpt_path),
         "split": args.split,
         "n": len(rows),
+        "sampling": samp,
         "epoch": ck.get("epoch"),
         "step": ck.get("step"),
         "jepa": jepa,
@@ -619,6 +753,7 @@ def main() -> None:
             "ckpt_epoch": ck.get("epoch"),
             "split": args.split,
             "n": len(rows),
+            "sample": f"{samp['mode']}/{sample_seed}",
             "psnr_full": round(float(col(rows, "psnr_full").mean()), 3),
             "psnr_noisy": round(float(col(rows, "psnr_noisy").mean()), 3),
             "delta_psnr": round(float((col(rows, "psnr_full") - col(rows, "psnr_noisy")).mean()), 3),
@@ -629,10 +764,22 @@ def main() -> None:
             "zctx_std": round(jepa["zctx_std"], 3),
             "checks_ok": f"{len(checks)-n_bad}/{len(checks)}",
         }
-        new_file = not index.exists()
+        # index.csv cu co the thieu cot moi (vd `sample`) -> ghi lai ca file voi header
+        # moi, cac lan chay cu de trong. Neu chi append thi cac cot se lech nhau.
+        old_rows = []
+        if index.exists():
+            with open(index, newline="") as fh:
+                old_rows = list(csv.DictReader(fh))
+        fields = list(line.keys())
+        stale = old_rows and list(old_rows[0].keys()) != fields
+        if stale:
+            with open(index, "w", newline="") as fh:
+                w = csv.DictWriter(fh, fieldnames=fields, restval="", extrasaction="ignore")
+                w.writeheader()
+                w.writerows(old_rows)
         with open(index, "a", newline="") as fh:
-            w = csv.DictWriter(fh, fieldnames=list(line.keys()))
-            if new_file:
+            w = csv.DictWriter(fh, fieldnames=fields)
+            if not old_rows and not index.stat().st_size:
                 w.writeheader()
             w.writerow(line)
         print(f"\nda ghi 1 dong vao {index}")
