@@ -145,11 +145,26 @@ class QwtJepa(nn.Module):
             z_tgt = z_all[:, mask.target_index]
 
         # ---- reconstruction ----
-        emb_full = self._assemble_full(z_ctx, z_pred, mask, b)
+        # LUOT 2: cho encoder xem TOAN BO 512 token nhieu, khong che gi.
+        # Day la CUNG mot self.context_encoder o tren, chi la goi lan thu hai voi dau
+        # vao khac - khong phai model thu hai, so tham so khong doi.
+        # Vi sao can luot rieng:
+        #   - Duong cu cho head an emb_full = 30% token that + 41% token predictor doan
+        #     + 30% hang so missing_token. Do that: predictor thua ca meo doan theo vi
+        #     tri (ti so L_jepa/pos ~1.1) nen 41% do la rac -> head chi co 30% thong tin
+        #     that de dung lai ca buc anh -> mo, va thua anh nhieu dau vao 4.3 dB.
+        #   - context_encoder luc train chua bao gio thay du 512 token (luon ~152),
+        #     nhung luc trien khai lai nap ca 512 -> lech train/test.
+        # KHONG gop hai luot lam mot: attention toan cuc se lam token context nhin thay
+        # token target -> L_jepa thanh gian lan.
         img_bands: dict = {}
         imu_bands: dict = {}
-        img_rec = self.image_head(emb_full, self.layout, img_bands)  # [B, 3, H, W]
-        imu_rec = self.imu_head(emb_full, self.layout, imu_bands)    # [B, T, 6]
+        if bool(self.cfg["model"].get("recon_from_full", True)):
+            emb_rec = self.context_encoder(tok_c)                    # [B, 512, d]
+        else:
+            emb_rec = self._assemble_full(z_ctx, z_pred, mask, b)    # duong cu
+        img_rec = self.image_head(emb_rec, self.layout, img_bands)   # [B, 3, H, W]
+        imu_rec = self.imu_head(emb_rec, self.layout, imu_bands)     # [B, T, 6]
         with torch.no_grad():
             img_bands_tgt = self._clean_bands_img(q_img_c)
             imu_bands_tgt = self._clean_bands_imu(q_imu_c)

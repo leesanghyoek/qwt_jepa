@@ -103,6 +103,10 @@ model:
   d_model: 384
   encoder:   {depth: 12, heads: 6}
   predictor: {d_pred: 192, depth: 4, heads: 6}
+  recon_from_full: true           # Recon head doc bieu dien cua TOAN BO token (luot rieng,
+                                  #   CUNG context_encoder, khong phai model thu hai) thay vi
+                                  #   doc emb_full da bi che 70%. Xem KIEN_TRUC_MODEL.md muc 7.
+                                  #   false = quay lai duong cu (de A/B).
   band_norm: true                 # Chia he so QWT moi dai cho std rieng truoc khi vao
                                   #   Linear, nhan lai o recon head. Bien do chenh ~100 lan
                                   #   (L3 LL std 2.31 vs L1 HH std 0.024) va chi co MOT

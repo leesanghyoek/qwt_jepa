@@ -15,7 +15,7 @@ import sys
 
 import torch
 import yaml
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
@@ -35,6 +35,18 @@ def build_loaders(cfg: dict, normalizer: ImuNormalizer):
 
     train_ds = PairedNoisyCleanDataset(man["train"], root, cfg, "train", normalizer)
     val_ds = PairedNoisyCleanDataset(man["valid"], root, cfg, "valid", normalizer)
+
+    # Manifest xep theo trajectory, nen shuffle=False + limit_val_batches lam eval chi
+    # doc phan DAU tap valid: do that tren 7 env local, 3200 mau dau chi phu 5 env -
+    # RetroOffice va WaterMillDay khong bao gio duoc danh gia. Tren Kaggle (14 env,
+    # doc 25% tap valid) con lech nang hon. Ngoai ra moi batch la 32 khung LIEN TIEP
+    # cung quy dao nen content_std va moc pos-only deu bi lech.
+    # Xao mot lan bang hoan vi CO DINH: vua phu deu moi truong, vua giu nguyen thu tu
+    # giua cac epoch de so sanh duoc.
+    perm = torch.randperm(
+        len(val_ds), generator=torch.Generator().manual_seed(int(tcfg.get("val_perm_seed", 0)))
+    ).tolist()
+    val_ds = Subset(val_ds, perm)
 
     common = dict(
         num_workers=int(tcfg.get("num_workers", 4)),

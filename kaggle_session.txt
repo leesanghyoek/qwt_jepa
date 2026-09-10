@@ -494,6 +494,44 @@ Muon do lai cac moc nay tren dung du lieu Kaggle:
 
 
 ================================================================================
+ C3. A/B TREN KAGGLE: recon_from_full true vs false
+================================================================================
+Thay doi lon nhat tinh den nay: recon head doc bieu dien cua TOAN BO 512 token
+(mot luot chay RIENG qua CUNG context_encoder) thay vi doc emb_full da bi che 70%.
+Xem KIEN_TRUC_MODEL.md muc 7. Chi phi: -52% throughput tren GPU roi. Tren Kaggle
+nut co chai la dataloader (4 vCPU) nen co the khong cham di may - phai chay moi biet.
+
+Chay HAI lan ngan, moi lan 5 epoch, chi khac dung mot dong config:
+
+# --- lan A: duong cu ---
+base["model"]["recon_from_full"] = False      # them vao Cell B2 truoc khi ghi kaggle.yaml
+# roi chay B4 voi --epochs 5 --out /kaggle/working/runs/ab_off
+
+# --- lan B: hai luot ---
+base["model"]["recon_from_full"] = True
+# roi chay B4 voi --epochs 5 --out /kaggle/working/runs/ab_on
+
+LUU Y: dat --epochs 5 cho CA HAI lan. total_steps = epochs * limit_train_batches nen
+lich lr/EMA phai giong nhau thi moi so sanh duoc.
+
+So bon so o dong [eval e4] cua hai lan, kem moc can vuot (do bang baseline_metrics
+tren dung du lieu Kaggle):
+
+    PSNR          moc phai vuot 21.99 dB
+    RMSE acc      moc phai vuot 0.123
+    RMSE gyro     moc phai vuot 0.122
+    L_jepa/pos    phai xuong duoi 1.00   (so thu hai tren dong eval la moc "gian lan")
+
+Neu lan B khong hon lan A ro rang o PSNR thi khong dang doi lay -52% throughput.
+
+CANH BAO: eval bay gio dung HOAN VI CO DINH cua tap valid (train.val_perm_seed).
+Truoc day shuffle=False + limit_val_batches=100 lam eval chi doc phan DAU tap valid:
+do that tren 7 env local, 2/7 moi truong KHONG BAO GIO duoc danh gia; tren Kaggle
+(14 env, doc ~25% tap valid) con lech nang hon. Nghia la moi con so PSNR do TRUOC
+thay doi nay deu tren mot lat cat thien lech, khong so sanh truc tiep duoc voi so moi.
+
+
+================================================================================
  D. GHI CHU
 ================================================================================
 - Quota GPU Kaggle: ~30h/tuan, moi phien toi da 12h. Notebook A khong dung GPU.
