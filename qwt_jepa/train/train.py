@@ -189,7 +189,8 @@ def main() -> None:
         )
         metrics = evaluate(model, val_loader, cfg, device, max_batches=lim_val)
         print(
-            f"[eval e{epoch}] L_jepa {metrics['L_jepa']:.4f} | z_std {metrics['zctx_std']:.3f} | "
+            f"[eval e{epoch}] L_jepa {metrics['L_jepa']:.4f}"
+            f"/{metrics['L_jepa_pos']:.4f}pos | z_std {metrics['zctx_std']:.3f} | "
             f"PSNR {metrics['psnr']:.2f} dB | "
             f"RMSE acc {metrics['rmse_acc']:.4f} gyro {metrics['rmse_gyro']:.4f}",
             flush=True,

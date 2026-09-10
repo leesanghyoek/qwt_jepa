@@ -21,7 +21,12 @@ import yaml
 
 from ..models.jepa import QwtJepa
 from ..models.layout import build_layout
-from ..train.losses import total_loss, variance_loss
+from ..train.losses import (
+    content_std,
+    jepa_loss_position_only,
+    total_loss,
+    variance_loss,
+)
 from ..train.masking import coarse_tokens, sample_masks
 
 _CFG = pathlib.Path(__file__).resolve().parents[1] / "configs" / "base.yaml"
@@ -92,3 +97,27 @@ def test_variance_loss_phat_dung_chieu():
     z_sap = torch.zeros(64, 32, 16) + torch.randn(1, 1, 16) * 0.01   # gan nhu hang so
     assert variance_loss(z_deu, gamma=1.0) < 0.1
     assert variance_loss(z_sap, gamma=1.0) > 0.9
+
+
+def test_variance_loss_bat_duoc_collapse_VI_TRI():
+    """Bat kieu collapse thu hai: bieu dien chi phu thuoc VI TRI token, khong phu
+    thuoc anh. std gop ca (batch, token) van ~1.0 nen KHONG phat hien duoc; phai do
+    std theo batch tai tung vi tri.
+    """
+    torch.manual_seed(0)
+    # moi vi tri token mot vector rieng, nhung MOI MAU trong batch deu giong het nhau
+    z_vi_tri = torch.randn(1, 32, 16).expand(64, 32, 16).contiguous()
+
+    pooled = z_vi_tri.reshape(-1, 16).std(dim=0).mean()
+    assert pooled > 0.8, "std gop van cao - chinh la cai bay"
+    assert content_std(z_vi_tri) < 0.05, "std theo noi dung phai ~0"
+    assert variance_loss(z_vi_tri, gamma=1.0) > 0.9, "phai bi phat nang"
+
+
+def test_jepa_loss_position_only_la_nguong_gian_lan():
+    torch.manual_seed(0)
+    z_vi_tri = torch.randn(1, 32, 16).expand(64, 32, 16).contiguous()
+    # bieu dien chi theo vi tri -> ke gian lan doan chinh xac tuyet doi
+    assert jepa_loss_position_only(z_vi_tri) < 1e-6
+    # bieu dien co noi dung that -> ke gian lan khong the doan duoc
+    assert jepa_loss_position_only(torch.randn(64, 32, 16)) > 0.1

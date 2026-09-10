@@ -464,8 +464,18 @@ Model nay tung collapse toan bo trong epoch 0. Dau hieu nam o z_std, khong nam o
 
 Sau moi epoch, dong [eval eN] in ra z_std (chinh la std cua z_ctx tren tap val):
 
-  LANH:  z_std leo tu ~0.45 len ~0.95 trong 3-5 epoch dau roi DUNG VUNG quanh 0.9-1.0
-  HONG:  z_std tut dan ve 0.1-0.2  -> collapse, dung train, bao lai
+  LANH:  z_std leo deu va khong tut. z_std day la std THEO NOI DUNG (doi anh thi bieu
+         dien doi bao nhieu), khong phai std gop ca (batch, token).
+  HONG:  z_std tut dan ve 0.1  -> collapse, dung train, bao lai
+
+Dong eval con in "L_jepa 0.0510/0.0569pos". So thu hai la L_jepa ma mot ke gian lan
+CHI doan theo vi tri token (khong nhin anh) dat duoc. DOC THEO TI SO:
+
+  ti so < 1.0  -> JEPA that su dung thong tin anh          OK
+  ti so >= 1.0 -> JEPA khong hoc gi ve noi dung, dung lai   HONG
+
+Ti so nay thuong bat dau rat cao (~15-40) roi tut xuong duoi 1.0 trong vai epoch dau.
+Day la chi so KHO LACH nhat: no hoi thang "bo anh di thi co te hon khong?".
 
 Ba dieu de KHONG hoang mang:
   1. L_jepa co the TANG trong vai epoch dau. Do la dau hieu TOT: z_ctx dang bung ra,

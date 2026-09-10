@@ -19,7 +19,8 @@ python -m qwt_jepa.scripts.baseline_metrics --split valid --n 128
 
 | Chỉ số | Vô dụng | Ngưỡng phải vượt | Tốt | Rất tốt | Cảnh báo |
 |---|---|---|---|---|---|
-| `z_std` / `ctx` | — | — | 0.7 – 1.0 | ổn định không tụt | 🔴 tụt dần → collapse |
+| `z_std` / `ctx` | — | — | 0.5 – 1.0 | ổn định không tụt | 🔴 tụt dần → collapse |
+| `L_jepa`/`pos` | ≥ 1.0 | < 1.0 | < 0.5 | < 0.2 | 🔴 ≥ 1.0 = tệ hơn đoán bừa theo vị trí |
 | `L_var` | — | — | < 0.1 | ≈ 0 | 🔴 > 0.3 kéo dài = `z_ctx` chưa bung ra |
 | `L_jepa` | ≈ 0.42 | < 0.29 | 0.08 – 0.17 | < 0.05 | 🔴 < 0.02 kèm `z_std` tụt |
 | `PSNR` | 14.0 dB | **20.9 dB** | 18 – 22 dB | > 24 dB | đứng im khi `L_jepa` giảm |
@@ -50,10 +51,16 @@ In ra mỗi `train.log_every: 50` batch.
 ### 2.2 Dòng eval — `qwt_jepa/train/train.py:179-183`
 
 ```
-[eval e5] L_jepa 0.4102 | z_std 0.962 | PSNR 18.34 dB | RMSE acc 0.1533 gyro 0.1401
+[eval e5] L_jepa 0.0510/0.0569pos | z_std 0.511 | PSNR 10.12 dB | RMSE acc 0.2709 gyro 0.1415
 ```
 
-`z_std` ở dòng eval là std của `z_ctx` — theo dõi collapse ngay trên tập val.
+Hai con số cần đọc kỹ:
+
+- **`0.0510/0.0569pos`** — `L_jepa` của model / `L_jepa` mà kẻ gian lận **chỉ đoán theo vị trí
+  token, không nhìn ảnh** đạt được. Tỉ số phải **< 1.0**; nếu ≥ 1.0 thì JEPA không học được gì
+  về nội dung ảnh (xem mục 10).
+- **`z_std`** — std của `z_ctx` **theo nội dung**: đổi ảnh đầu vào thì biểu diễn đổi bao nhiêu.
+  Không phải std gộp cả (batch, token).
 
 In một lần sau mỗi epoch. Đây là **trung bình có trọng số theo batch size**
 (`engine.py:125-131`) trên tối đa `train.limit_val_batches: 100` batch.
@@ -481,3 +488,66 @@ Chạy thật `train.py` 4 epoch ngắn sau khi sửa:
 (ảnh `L1 HH` std 0.040 vs `L3 LL` std 2.23) nhưng `Tokenizer.image_proj` và `ImageHead.proj`
 chỉ là **một** `nn.Linear` dùng chung. Nên chia hệ số mỗi dải cho std cố định của nó rồi nhân
 lại trong head. Để riêng vì đụng cả tokenizer lẫn head — làm sau khi xác nhận `z_std` đứng vững.
+
+
+---
+
+## 10. Collapse kiểu VỊ TRÍ (phát hiện sau mục 9)
+
+Sau khi vá collapse ở mục 9, lần train tiếp theo cho `z_std 1.006`, `L_var 0.008` — trông
+hoàn hảo — nhưng `L_jepa` vẫn tụt về **0.0125**, đúng bằng con số của lần collapse trước.
+
+Mổ `z_tgt` ra thì thấy:
+
+```
+z_std đang log (gộp cả batch và token) : 0.9949   ← trông rất khoẻ
+std theo NỘI DUNG (đổi ảnh)            : 0.1313   ← thực chất chỉ có bấy nhiêu
+std theo VỊ TRÍ   (đổi token)          : 0.9946
+```
+
+Phép thử quyết định — dự đoán `z_tgt` **chỉ bằng trung bình theo vị trí token**, bỏ qua
+hoàn toàn ảnh đầu vào:
+
+```
+chỉ dùng vị trí, không nhìn ảnh : 0.0092
+model thật (có nhìn ảnh)        : 0.0134     ← TỆ HƠN
+```
+
+Model đang thua chính cái baseline không thèm nhìn ảnh.
+
+**Nguyên nhân.** `variance_loss` ở mục 9.3 tính std gộp cả `(batch, token)`. Encoder thoả
+mãn ràng buộc đó bằng cách cho các **vị trí** khác nhau — không cần các **ảnh** khác nhau.
+Vị trí token là thứ dễ đoán nhất, nên tối ưu hoá `L_jepa` đẩy thẳng vào lối đó.
+
+**Cách sửa.** `variance_loss` và `content_std` nay đo std **theo batch tại từng vị trí token**:
+
+```python
+std = torch.sqrt(z.float().var(dim=0) + eps)   # [T, D] - đổi ảnh thì đổi bao nhiêu
+return F.relu(gamma - std).mean()
+```
+
+Thêm `jepa_loss_position_only()` in ra ở dòng eval làm mốc gian lận thường trực.
+
+**Chọn `gamma`.** Đo A/B 500 bước:
+
+| `gamma` | `L_jepa` | pos-only | tỉ lệ | `z_tgt` nội dung |
+|---|---|---|---|---|
+| **1.0** | 0.0409 | 0.2067 | **0.20** | **0.662** |
+| 0.5 | 0.0166 | 0.0489 | 0.34 | 0.314 |
+
+`gamma 1.0` thắng ở cả hai mặt. Đừng hạ xuống.
+
+**Kết quả sau khi sửa** (`train.py`, 4 epoch × 120 batch, batch 32):
+
+```
+[eval e0] L_jepa 0.2152/0.0128pos | z_std 0.361 | PSNR  4.90 dB
+[eval e1] L_jepa 0.1159/0.0318pos | z_std 0.488 | PSNR  7.88 dB
+[eval e2] L_jepa 0.0812/0.0536pos | z_std 0.520 | PSNR  9.98 dB
+[eval e3] L_jepa 0.0510/0.0569pos | z_std 0.511 | PSNR 10.12 dB
+```
+
+Tỉ lệ đi 16.8 → 3.6 → 1.5 → **0.90**, vượt mốc 1.0.
+
+**Bài học chung:** một chỉ số chống collapse chỉ chặn được đúng kiểu collapse mà nó đo.
+`z_std` gộp chặn được "mọi token về một vector" nhưng mù trước "biểu diễn chỉ còn là hàm
+của vị trí". Mốc `pos-only` khó lách hơn vì nó hỏi thẳng: *bỏ ảnh đi thì có tệ hơn không?*

@@ -24,19 +24,52 @@ def jepa_loss(z_pred: torch.Tensor, z_tgt: torch.Tensor) -> torch.Tensor:
     return F.smooth_l1_loss(z_pred, z_tgt.detach())
 
 
-def variance_loss(z: torch.Tensor, gamma: float = 1.0, eps: float = 1e-4) -> torch.Tensor:
-    """Phat khi do lech chuan theo TUNG CHIEU (tinh qua batch va token) tut duoi `gamma`.
+@torch.no_grad()
+def content_std(z: torch.Tensor) -> torch.Tensor:
+    """Do lech chuan theo BATCH tai TUNG vi tri token, roi trung binh. z: [B, T, D].
 
-    Day la luc doi khang truc tiep voi representation collapse: khong the lam
-    L_jepa -> 0 bang cach cho encoder xuat gan nhu cung mot vector nua.
+    Do dung cai ta can: "doi anh dau vao thi bieu dien doi bao nhieu".
+
+    KHONG dung std gop ca (batch, token). Do la cai bay: bieu dien co the dat
+    std gop ~1.0 chi bang cach cho cac VI TRI token khac nhau, trong khi doi anh
+    thi gan nhu khong doi gi. Do thuc te o trang thai do: std gop 0.995 nhung std
+    theo noi dung chi 0.131 - va predictor bi danh bai boi mot baseline chi doan
+    theo vi tri token, khong nhin anh (0.0092 so voi 0.0134).
+    """
+    if z.shape[0] < 2:
+        return z.new_zeros(())
+    return torch.sqrt(z.float().var(dim=0) + 1e-4).mean()
+
+
+def variance_loss(z: torch.Tensor, gamma: float = 0.5, eps: float = 1e-4) -> torch.Tensor:
+    """Phat khi do lech chuan THEO NOI DUNG tut duoi `gamma`. z: [B, T, D].
+
+    Luc doi khang truc tiep voi ca hai kieu collapse:
+      - collapse hoan toan : moi token ve cung mot vector
+      - collapse vi tri    : bieu dien chi con phu thuoc vi tri token, doi anh
+                             khong doi gi -> L_jepa ve 0 ma khong hoc duoc gi
 
     Chi ap cho z_ctx (dau ra context_encoder, da qua LayerNorm nen scale bi chan).
     KHONG ap cho z_pred: predictor ket thuc bang Linear khong chuan hoa, model se
     "lach" bang cach phong to scale dau ra thay vi tang do da dang that su.
     """
-    z = z.float().reshape(-1, z.shape[-1])
-    std = torch.sqrt(z.var(dim=0) + eps)
+    if z.shape[0] < 2:                       # can it nhat 2 mau de co phuong sai
+        return z.new_zeros(())
+    std = torch.sqrt(z.float().var(dim=0) + eps)      # [T, D] - std theo BATCH
     return F.relu(gamma - std).mean()
+
+
+@torch.no_grad()
+def jepa_loss_position_only(z_tgt: torch.Tensor) -> torch.Tensor:
+    """L_jepa ma mot ke gian lan dat duoc khi CHI doan theo vi tri token.
+
+    Lay trung binh z_tgt theo batch tai tung vi tri roi dung chinh no lam du doan
+    - tuc la bo qua hoan toan anh dau vao. Model that PHAI thap hon dang ke con so
+    nay; neu khong, JEPA khong hoc duoc gi ve noi dung.
+    """
+    if z_tgt.shape[0] < 2:
+        return z_tgt.new_zeros(())
+    return F.smooth_l1_loss(z_tgt.mean(dim=0, keepdim=True).expand_as(z_tgt), z_tgt)
 
 
 def imu_recon_loss(rec: torch.Tensor, clean: torch.Tensor) -> torch.Tensor:
@@ -69,8 +102,11 @@ def total_loss(
         "L_img": float(l_img.detach()),
         "L_imu": float(l_imu.detach()),
         "L_var": float(l_var.detach()),
-        "ztgt_std": ztgt_std(out["z_tgt"]),
-        "zctx_std": ztgt_std(out["z_ctx"]) if "z_ctx" in out else 0.0,
+        # std THEO NOI DUNG (doi anh), khong phai std gop ca (batch, token)
+        "ztgt_std": float(content_std(out["z_tgt"])),
+        "zctx_std": float(content_std(out["z_ctx"])) if "z_ctx" in out else 0.0,
+        # nguong gian lan: L_jepa dat duoc khi chi doan theo vi tri token
+        "L_jepa_pos": float(jepa_loss_position_only(out["z_tgt"])),
     }
     return total, logs
 

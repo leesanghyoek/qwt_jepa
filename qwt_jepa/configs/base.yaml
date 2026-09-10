@@ -141,7 +141,14 @@ train:
     lambda_imu: 1.0
     lambda_var: 1.0           # luc chong collapse (hinge kieu VICReg tren z_ctx).
                               #   0 = tat. Tang neu z_std van tut.
-    var_gamma:  1.0           # nguong std moi chieu; chi phat khi TUT DUOI muc nay
+    var_gamma:  1.0           # nguong std THEO NOI DUNG (doi anh thi bieu dien doi bao
+                              #   nhieu), do theo batch tai tung vi tri token. KHONG phai
+                              #   std gop ca (batch, token): std gop co the dat ~1.0 chi
+                              #   nho khac biet giua cac VI TRI token, trong khi doi anh
+                              #   khong doi gi -> L_jepa ve 0 ma khong hoc duoc gi.
+                              #   Do A/B 500 buoc: gamma 1.0 cho z_tgt noi dung 0.662 va
+                              #   L_jepa/pos-only 0.20; gamma 0.5 chi cho 0.314 va 0.34.
+                              #   => dung 1.0, dung ha xuong.
   amp: bf16
   grad_clip: 1.0
   log_every: 50
