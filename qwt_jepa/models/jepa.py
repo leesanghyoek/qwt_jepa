@@ -58,6 +58,46 @@ class QwtJepa(nn.Module):
         self.levels_imu = int(cfg["data"]["imu"]["qwt_levels"])
 
     # ------------------------------------------------------------------ #
+    @torch.no_grad()
+    def _clean_bands_img(self, q_img: dict) -> dict:
+        """He so anh SACH, chuan hoa y het duong du doan -> lam target."""
+        from .tokenizer import patchify
+
+        out = {}
+        for i, e in enumerate(self.layout.image_entries):
+            band = q_img[e.level][e.band][:, 1:4] / self.image_head.band_scale[i]
+            out[(e.level, e.band)] = patchify(band, e.gh, e.gw, self.layout.patch)
+        return out
+
+    @torch.no_grad()
+    def _clean_bands_imu(self, q_imu: dict) -> dict:
+        out = {}
+        for i, e in enumerate(self.layout.imu_entries):
+            band = q_imu[e.group][e.level][e.band][:, :, 1:4] / self.imu_head.band_scale[i]
+            out[(e.group, e.level, e.band)] = band
+        return out
+
+    @torch.no_grad()
+    def set_band_scales(self, scales: dict) -> None:
+        """Nap bien do tung dai QWT vao tokenizer + 2 head (xem data/band_stats.py).
+
+        Phai goi TRUOC khi load_state_dict luc resume: cac gia tri nay la buffer nen
+        di theo checkpoint, ban trong checkpoint moi la ban dung.
+        """
+        from ..data.band_stats import scales_to_tensors
+
+        img, imu = scales_to_tensors(scales, self.layout)
+        for mod, buf, val in (
+            (self.tokenizer, "img_band_scale", img),
+            (self.tokenizer, "imu_band_scale", imu),
+            (self.target_tokenizer, "img_band_scale", img),
+            (self.target_tokenizer, "imu_band_scale", imu),
+            (self.image_head, "band_scale", img),
+            (self.imu_head, "band_scale", imu),
+        ):
+            getattr(mod, buf).copy_(val.to(getattr(mod, buf).device))
+
+    # ------------------------------------------------------------------ #
     def _qwt_all(self, img: torch.Tensor, imu: torch.Tensor) -> tuple[dict, dict]:
         q_img = image_qwt(rgb_to_quat(img), self.levels_image)
         q_imu = imu_qwt(imu, self.levels_imu)
@@ -106,8 +146,13 @@ class QwtJepa(nn.Module):
 
         # ---- reconstruction ----
         emb_full = self._assemble_full(z_ctx, z_pred, mask, b)
-        img_rec = self.image_head(emb_full, self.layout)             # [B, 3, H, W]
-        imu_rec = self.imu_head(emb_full, self.layout)               # [B, T, 6]
+        img_bands: dict = {}
+        imu_bands: dict = {}
+        img_rec = self.image_head(emb_full, self.layout, img_bands)  # [B, 3, H, W]
+        imu_rec = self.imu_head(emb_full, self.layout, imu_bands)    # [B, T, 6]
+        with torch.no_grad():
+            img_bands_tgt = self._clean_bands_img(q_img_c)
+            imu_bands_tgt = self._clean_bands_imu(q_imu_c)
 
         return {
             "z_pred": z_pred,
@@ -115,6 +160,13 @@ class QwtJepa(nn.Module):
             "z_ctx": z_ctx,          # can cho variance_loss (chong collapse)
             "img_rec": img_rec,
             "imu_rec": imu_rec,
+            # he so QWT DA CHUAN HOA - de tinh loss can bang giua cac dai. Loss anh
+            # tren mien pixel bi dai L3 LL nuot (94% nang luong) nen mot minh no
+            # khong bao gio day model tai tao chi tiet min -> anh ra bi mo.
+            "img_bands": img_bands,
+            "imu_bands": imu_bands,
+            "img_bands_tgt": img_bands_tgt,
+            "imu_bands_tgt": imu_bands_tgt,
             "mask": mask,
         }
 

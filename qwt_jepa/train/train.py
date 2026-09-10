@@ -21,6 +21,7 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from qwt_jepa.data.band_stats import compute_band_scales                 # noqa: E402
 from qwt_jepa.data.dataset import PairedNoisyCleanDataset, jepa_collate   # noqa: E402
 from qwt_jepa.data.normalize import ImuNormalizer                        # noqa: E402
 from qwt_jepa.models.jepa import QwtJepa                                  # noqa: E402
@@ -113,6 +114,19 @@ def main() -> None:
     model = QwtJepa(cfg).to(device)
     n_par = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"QwtJepa: {n_par/1e6:.2f}M params train | N tokens {model.layout.n_tokens}")
+
+    # Bien do he so QWT chenh ~100 lan giua cac dai -> phai chuan hoa, neu khong
+    # encoder gan nhu khong nhin thay chi tiet min va anh tai tao bi mo.
+    # Do tren vai batch train SACH; ket qua la buffer nen di theo checkpoint.
+    if bool(cfg["model"].get("band_norm", True)):
+        scales = compute_band_scales(train_loader, model._qwt_all, model.layout, n_batches=8)
+        model.set_band_scales(scales)
+        lo = min(scales, key=scales.get)
+        hi = max(scales, key=scales.get)
+        print(f"band_norm: ON  | dai nho nhat {lo} {scales[lo]:.4f} | "
+              f"lon nhat {hi} {scales[hi]:.4f} | ti le {scales[hi]/scales[lo]:.0f}x")
+    else:
+        print("band_norm: OFF")
 
     ocfg = cfg["train"]["optimizer"]
     optimizer = torch.optim.AdamW(

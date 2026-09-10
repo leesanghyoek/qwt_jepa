@@ -121,3 +121,73 @@ def test_jepa_loss_position_only_la_nguong_gian_lan():
     assert jepa_loss_position_only(z_vi_tri) < 1e-6
     # bieu dien co noi dung that -> ke gian lan khong the doan duoc
     assert jepa_loss_position_only(torch.randn(64, 32, 16)) > 0.1
+
+
+def test_band_norm_can_bang_bien_do_cac_dai():
+    """Sau khi nap band scale, MOI dai phai co std ~1 truoc khi vao Linear dung chung.
+
+    Khong chuan hoa thi he so L1 (std ~0.024) va L3 LL (std ~2.31) chenh ~100 lan,
+    encoder gan nhu khong nhin thay chi tiet min -> anh tai tao mo.
+    """
+    from ..models.tokenizer import patchify
+
+    cfg = _cfg()
+    model = QwtJepa(cfg)
+    # PHAI dung anh co pho kieu anh THAT (nang luong don ve tan so thap). Anh nhieu
+    # trang co pho phang -> moi dai da can bang san, khong co gi de chuan hoa.
+    h = int(cfg["data"]["image"]["train_crop"][0])
+    g = torch.Generator().manual_seed(0)
+    ramp = torch.linspace(0, 1, h)
+    smooth = (ramp[None, :] + ramp[:, None]) / 2                    # nen muot -> LL lon
+    img = smooth.expand(4, 3, h, h) + 0.01 * torch.rand(4, 3, h, h, generator=g)
+    q_img, _ = model._qwt_all(img, torch.randn(4, 128, 6, generator=g))
+
+    def band_stds(scaled: bool) -> list[float]:
+        out = []
+        for i, e in enumerate(model.layout.image_entries):
+            band = q_img[e.level][e.band][:, 1:4]
+            if scaled:
+                band = band / model.tokenizer.img_band_scale[i]
+            out.append(float(band.std()))
+        return out
+
+    raw = band_stds(False)
+    assert max(raw) / min(raw) > 20, "anh thu nghiem phai co bien do lech nhieu giua cac dai"
+
+    scales = {f"L{e.level}/{e.band}": s for e, s in zip(model.layout.image_entries, raw)}
+    scales |= {f"{e.group}/L{e.level}/{e.band}": 1.0 for e in model.layout.imu_entries}
+    model.set_band_scales(scales)
+
+    done = band_stds(True)
+    assert all(abs(v - 1.0) < 1e-3 for v in done), f"moi dai phai ve std ~1, dang la {done}"
+
+    # va he qua: activation vao encoder khong con chenh hang tram lan
+    def act_spread() -> float:
+        st = []
+        for i, e in enumerate(model.layout.image_entries):
+            band = q_img[e.level][e.band][:, 1:4] / model.tokenizer.img_band_scale[i]
+            p = patchify(band, e.gh, e.gw, model.layout.patch)
+            st.append(float(model.tokenizer.image_proj(p).std().detach()))
+        return max(st) / min(st)
+
+    assert act_spread() < max(raw) / min(raw), "chuan hoa phai lam HEP khoang cach bien do"
+
+
+def test_band_scale_nap_cho_ca_nhanh_target_va_head():
+    cfg = _cfg()
+    model = QwtJepa(cfg)
+    n_img = len(model.layout.image_entries)
+    n_imu = len(model.layout.imu_entries)
+    scales = {f"L{e.level}/{e.band}": 2.0 for e in model.layout.image_entries}
+    scales |= {f"{e.group}/L{e.level}/{e.band}": 3.0 for e in model.layout.imu_entries}
+    model.set_band_scales(scales)
+
+    for buf, want, n in (
+        (model.tokenizer.img_band_scale, 2.0, n_img),
+        (model.target_tokenizer.img_band_scale, 2.0, n_img),
+        (model.image_head.band_scale, 2.0, n_img),
+        (model.tokenizer.imu_band_scale, 3.0, n_imu),
+        (model.target_tokenizer.imu_band_scale, 3.0, n_imu),
+        (model.imu_head.band_scale, 3.0, n_imu),
+    ):
+        assert buf.shape == (n,) and torch.allclose(buf, torch.full((n,), want))

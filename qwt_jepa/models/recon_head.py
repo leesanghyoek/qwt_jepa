@@ -41,12 +41,24 @@ class ImageHead(nn.Module):
         self.levels = layout.levels_image
         self.shapes = layout.image_shapes
         self.proj = nn.Linear(d_model, 3 * self.p * self.p)
+        # Doi xung voi Tokenizer: head du doan he so DA CHUAN HOA roi nhan lai scale.
+        self.register_buffer("band_scale", torch.ones(len(layout.image_entries)))
 
-    def forward(self, emb_full: torch.Tensor, layout: TokenLayout) -> torch.Tensor:
+    def forward(
+        self,
+        emb_full: torch.Tensor,
+        layout: TokenLayout,
+        bands_out: dict | None = None,
+    ) -> torch.Tensor:
+        """`bands_out` (tuy chon): nhan he so DA CHUAN HOA cua tung dai, de tinh
+        loss can bang giua cac dai (xem losses.band_balanced_loss)."""
         pyr: dict = {"levels": self.levels}
-        for e in layout.image_entries:
+        for i, e in enumerate(layout.image_entries):
             tok = emb_full[:, e.start:e.end]                      # [B, gh*gw, d]
-            band = self.proj(tok)                                 # [B, gh*gw, 3p^2]
+            norm = self.proj(tok)                                 # he so da chuan hoa
+            if bands_out is not None:
+                bands_out[(e.level, e.band)] = norm
+            band = norm * self.band_scale[i]                      # [B, gh*gw, 3p^2]
             band = unpatchify(band, e.gh, e.gw, self.p)           # [B, 3, h, w]
             pyr.setdefault(e.level, {})[e.band] = _pad_w0_img(band)
         q = image_iqwt(pyr, shapes=self.shapes)                   # [B, 4, H, W]
@@ -60,14 +72,23 @@ class ImuHead(nn.Module):
         self.levels = layout.levels_imu
         self.lens = layout.imu_shapes
         self.proj = nn.Linear(d_model, 3)
+        self.register_buffer("band_scale", torch.ones(len(layout.imu_entries)))
 
-    def forward(self, emb_full: torch.Tensor, layout: TokenLayout) -> torch.Tensor:
+    def forward(
+        self,
+        emb_full: torch.Tensor,
+        layout: TokenLayout,
+        bands_out: dict | None = None,
+    ) -> torch.Tensor:
         coeffs: dict = {
             "acc": {"levels": self.levels},
             "gyro": {"levels": self.levels},
         }
-        for e in layout.imu_entries:
+        for i, e in enumerate(layout.imu_entries):
             tok = emb_full[:, e.start:e.end]              # [B, L, d]
-            v = _pad_w0_seq(self.proj(tok))               # [B, L, 4]
+            norm = self.proj(tok)                         # he so da chuan hoa
+            if bands_out is not None:
+                bands_out[(e.group, e.level, e.band)] = norm
+            v = _pad_w0_seq(norm * self.band_scale[i])    # [B, L, 4]
             coeffs[e.group].setdefault(e.level, {})[e.band] = v
         return imu_iqwt(coeffs, lens=self.lens)           # [B, T, 6]

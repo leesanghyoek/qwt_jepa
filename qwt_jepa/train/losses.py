@@ -72,6 +72,26 @@ def jepa_loss_position_only(z_tgt: torch.Tensor) -> torch.Tensor:
     return F.smooth_l1_loss(z_tgt.mean(dim=0, keepdim=True).expand_as(z_tgt), z_tgt)
 
 
+def band_balanced_loss(pred: dict, tgt: dict) -> torch.Tensor:
+    """Charbonnier tren he so QWT DA CHUAN HOA, MOI DAI TRONG SO NGANG NHAU.
+
+    Vi sao can: L_img tinh tren mien pixel, ma sai so o dai L3 LL gay loi pixel lon
+    gap ~100 lan sai so o dai L1. Do that tren tap valid:
+
+        dai        token   % token   % nang luong
+        L3 LL          4      1.6%        94.10%
+        L1 LH+HL+HH  192     75.0%         1.03%
+
+    Nen duoi L_img mot minh, "lam mo" la nghiem TOI UU - model chi can dung cai anh
+    thu nho 32x32 la da duoc ~19.7 dB. Loss nay chia deu trong so cho tung dai nen
+    chi tiet min moi co gradient dang ke.
+    """
+    if not pred:
+        return torch.zeros(())
+    terms = [charbonnier(pred[k], tgt[k].to(pred[k].dtype)) for k in pred]
+    return torch.stack(terms).mean()
+
+
 def imu_recon_loss(rec: torch.Tensor, clean: torch.Tensor) -> torch.Tensor:
     l_acc = F.l1_loss(rec[..., 0:3], clean[..., 0:3])
     l_gyro = F.l1_loss(rec[..., 3:6], clean[..., 3:6])
@@ -85,11 +105,20 @@ def total_loss(
     lambda_imu: float = 1.0,
     lambda_var: float = 0.0,
     var_gamma: float = 1.0,
+    lambda_band: float = 0.0,
 ) -> tuple[torch.Tensor, dict]:
     l_jepa = jepa_loss(out["z_pred"], out["z_tgt"])
     l_img = charbonnier(out["img_rec"], batch["img_clean"])
     l_imu = imu_recon_loss(out["imu_rec"], batch["imu_clean"])
     total = l_jepa + lambda_img * l_img + lambda_imu * l_imu
+
+    l_band = torch.zeros((), device=l_jepa.device)
+    if lambda_band > 0 and "img_bands" in out:
+        l_band = (
+            band_balanced_loss(out["img_bands"], out["img_bands_tgt"])
+            + band_balanced_loss(out["imu_bands"], out["imu_bands_tgt"])
+        )
+        total = total + lambda_band * l_band
 
     l_var = torch.zeros((), device=l_jepa.device)
     if lambda_var > 0 and "z_ctx" in out:
@@ -101,6 +130,7 @@ def total_loss(
         "L_jepa": float(l_jepa.detach()),
         "L_img": float(l_img.detach()),
         "L_imu": float(l_imu.detach()),
+        "L_band": float(l_band.detach()),
         "L_var": float(l_var.detach()),
         # std THEO NOI DUNG (doi anh), khong phai std gop ca (batch, token)
         "ztgt_std": float(content_std(out["z_tgt"])),

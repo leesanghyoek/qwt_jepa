@@ -50,6 +50,14 @@ class Tokenizer(nn.Module):
         self.register_buffer("mod_ids", layout.modality, persistent=False)
         self.register_buffer("scale_ids", layout.scale_id, persistent=False)
 
+        # Bien do he so QWT chenh ~100 lan giua cac dai (L3 LL std 2.31 vs L1 HH
+        # std 0.024). image_proj / imu_proj la MOT Linear dung chung, nen neu khong
+        # chuan hoa thi he so dai min cho activation nho xiu -> encoder khong nhin
+        # thay chi tiet -> anh tai tao mo. Buffer nen di theo checkpoint.
+        # Mac dinh 1.0 = khong chuan hoa; train.py goi set_band_scales() de nap so that.
+        self.register_buffer("img_band_scale", torch.ones(len(layout.image_entries)))
+        self.register_buffer("imu_band_scale", torch.ones(len(layout.imu_entries)))
+
         nn.init.trunc_normal_(self.pos_embed, std=0.02)
         nn.init.trunc_normal_(self.modality_emb.weight, std=0.02)
         nn.init.trunc_normal_(self.scale_emb.weight, std=0.02)
@@ -57,13 +65,15 @@ class Tokenizer(nn.Module):
     def forward(self, qwt_image: dict, qwt_imu: dict) -> torch.Tensor:
         parts: list[torch.Tensor] = []
 
-        for e in self.layout.image_entries:
+        for i, e in enumerate(self.layout.image_entries):
             band = qwt_image[e.level][e.band][:, 1:4]          # [B, 3, h, w] (phan vector)
+            band = band / self.img_band_scale[i]               # dua moi dai ve std ~1
             patches = patchify(band, e.gh, e.gw, self.layout.patch)
             parts.append(self.image_proj(patches))            # [B, gh*gw, d]
 
-        for e in self.layout.imu_entries:
+        for i, e in enumerate(self.layout.imu_entries):
             band = qwt_imu[e.group][e.level][e.band][:, :, 1:4]  # [B, L, 3]
+            band = band / self.imu_band_scale[i]
             parts.append(self.imu_proj(band))                    # [B, L, d]
 
         tok = torch.cat(parts, dim=1)                            # [B, N, d]

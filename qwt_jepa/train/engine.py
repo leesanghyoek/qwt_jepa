@@ -46,6 +46,7 @@ def _loss_kwargs(cfg: dict) -> dict:
         lambda_imu=float(lam.get("lambda_imu", 1.0)),
         lambda_var=float(lam.get("lambda_var", 0.0)),
         var_gamma=float(lam.get("var_gamma", 1.0)),
+        lambda_band=float(lam.get("lambda_band", 0.0)),
     )
 
 
@@ -101,7 +102,7 @@ def train_one_epoch(
                 f"e{epoch} {i:4d}/{len(loader)} step {step:6d} | "
                 f"L {logs['L_total']:.4f} (jepa {logs['L_jepa']:.4f} "
                 f"img {logs['L_img']:.4f} imu {logs['L_imu']:.4f} "
-                f"var {logs['L_var']:.4f}) | "
+                f"band {logs['L_band']:.4f} var {logs['L_var']:.4f}) | "
                 f"z_std {logs['ztgt_std']:.3f} ctx {logs['zctx_std']:.3f} | "
                 f"lr {lr:.2e} m {m:.4f} | {ips:.1f} im/s",
                 flush=True,

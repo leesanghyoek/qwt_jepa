@@ -103,6 +103,11 @@ model:
   d_model: 384
   encoder:   {depth: 12, heads: 6}
   predictor: {d_pred: 192, depth: 4, heads: 6}
+  band_norm: true                 # Chia he so QWT moi dai cho std rieng truoc khi vao
+                                  #   Linear, nhan lai o recon head. Bien do chenh ~100 lan
+                                  #   (L3 LL std 2.31 vs L1 HH std 0.024) va chi co MOT
+                                  #   Linear dung chung, nen khong chuan hoa thi encoder
+                                  #   khong nhin thay chi tiet min -> anh mo.
   token_patch_image: 16           # 8 -> 16: token anh 1024 -> 256. Truoc day 60% token nam
                                   #   o muc 1 (SNR ~0 dB) - dung thang bi nhieu vui nang nhat.
   cross_modal_masking: true
@@ -139,6 +144,10 @@ train:
   loss:
     lambda_img: 1.0
     lambda_imu: 1.0
+    lambda_band: 1.0          # loss tren he so QWT DA CHUAN HOA, moi dai trong so ngang
+                              #   nhau. Khong co no thi L_img (mien pixel) bi dai L3 LL
+                              #   nuot - LL giu 94% nang luong tuy chi co 4/256 token -
+                              #   nen "lam mo" la nghiem toi uu va anh ra luon nhoe.
     lambda_var: 1.0           # luc chong collapse (hinge kieu VICReg tren z_ctx).
                               #   0 = tat. Tang neu z_std van tut.
     var_gamma:  1.0           # nguong std THEO NOI DUNG (doi anh thi bieu dien doi bao
