@@ -144,10 +144,16 @@ train:
   loss:
     lambda_img: 1.0
     lambda_imu: 1.0
-    lambda_band: 1.0          # loss tren he so QWT DA CHUAN HOA, moi dai trong so ngang
-                              #   nhau. Khong co no thi L_img (mien pixel) bi dai L3 LL
-                              #   nuot - LL giu 94% nang luong tuy chi co 4/256 token -
-                              #   nen "lam mo" la nghiem toi uu va anh ra luon nhoe.
+    lambda_band: 0.0          # TAT theo mac dinh. Loss tren he so QWT da chuan hoa, moi
+                              #   dai trong so ngang nhau. Gia thuyet: L_img (mien pixel)
+                              #   bi dai L3 LL nuot (94% nang luong / 4 token) nen model
+                              #   khong co dong co tai tao chi tiet min.
+                              #   DO A/B 1200 buoc, batch 32 -> GIA THUYET SAI:
+                              #     goc          PSNR 11.10 dB | sai so dai L1 1.123
+                              #     +band_norm   PSNR 11.49 dB | sai so dai L1 0.971
+                              #     +ca L_band   PSNR 11.26 dB | sai so dai L1 0.980
+                              #   Them L_band lam TE HON ca hai chi so. Giu lai lam nut
+                              #   van de thu nghiem, nhung dung bat neu chua do lai.
     lambda_var: 1.0           # luc chong collapse (hinge kieu VICReg tren z_ctx).
                               #   0 = tat. Tang neu z_std van tut.
     var_gamma:  1.0           # nguong std THEO NOI DUNG (doi anh thi bieu dien doi bao
