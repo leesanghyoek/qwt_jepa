@@ -34,7 +34,15 @@ class QwtJepa(nn.Module):
 
         self.tokenizer = Tokenizer(cfg, self.layout)
         self.context_encoder = Encoder(d_model, int(enc["depth"]), int(enc["heads"]))
+
+        # Nhanh target phai la ban EMA HOAN CHINH: tokenizer + encoder.
+        # Neu dung chung `self.tokenizer` cho ca hai nhanh thi du co torch.no_grad()
+        # o nhanh target, optimizer van cap nhat tokenizer tu nhanh context moi buoc
+        # -> z_tgt dich chuyen theo huong optimizer muon -> collapse (z_std tut dan).
+        self.target_tokenizer = copy.deepcopy(self.tokenizer)
         self.target_encoder = copy.deepcopy(self.context_encoder)
+        for p in self.target_tokenizer.parameters():
+            p.requires_grad_(False)
         for p in self.target_encoder.parameters():
             p.requires_grad_(False)
 
@@ -92,7 +100,7 @@ class QwtJepa(nn.Module):
         # ---- nhanh target: CLEAN, stop-grad ----
         with torch.no_grad():
             q_img_c, q_imu_c = self._qwt_all(img_c, imu_c)
-            tok_t = self.tokenizer(q_img_c, q_imu_c)
+            tok_t = self.target_tokenizer(q_img_c, q_imu_c)
             z_all = self.target_encoder(tok_t)
             z_tgt = z_all[:, mask.target_index]
 
@@ -104,6 +112,7 @@ class QwtJepa(nn.Module):
         return {
             "z_pred": z_pred,
             "z_tgt": z_tgt,
+            "z_ctx": z_ctx,          # can cho variance_loss (chong collapse)
             "img_rec": img_rec,
             "imu_rec": imu_rec,
             "mask": mask,
@@ -112,8 +121,16 @@ class QwtJepa(nn.Module):
     # ------------------------------------------------------------------ #
     @torch.no_grad()
     def ema_update(self, m: float) -> None:
-        """Cap nhat target_encoder = m * target + (1 - m) * context. Goi sau optimizer.step()."""
-        for pt, pc in zip(self.target_encoder.parameters(), self.context_encoder.parameters()):
-            pt.mul_(m).add_(pc.detach(), alpha=1.0 - m)
-        for bt, bc in zip(self.target_encoder.buffers(), self.context_encoder.buffers()):
-            bt.copy_(bc)
+        """target = m * target + (1 - m) * online. Goi sau optimizer.step().
+
+        Cap nhat CA HAI cap (tokenizer, encoder) - bo sot tokenizer la duong tat
+        dan thang toi representation collapse.
+        """
+        for tgt, src in (
+            (self.target_tokenizer, self.tokenizer),
+            (self.target_encoder, self.context_encoder),
+        ):
+            for pt, pc in zip(tgt.parameters(), src.parameters()):
+                pt.mul_(m).add_(pc.detach(), alpha=1.0 - m)
+            for bt, bc in zip(tgt.buffers(), src.buffers()):
+                bt.copy_(bc)

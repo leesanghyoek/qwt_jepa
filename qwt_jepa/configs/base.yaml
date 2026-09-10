@@ -108,6 +108,11 @@ model:
   cross_modal_masking: true
 
 masking:
+  protect_coarse:       true   # LUON giu dai tho (anh LL, imu A) trong context: khong bao
+                               #   gio lam target, khong bao gio bi vut. Chi 36/512 token
+                               #   nhung mang gan het do sang/bo cuc. Do thuc te: tat -> tran
+                               #   PSNR chi 17.5 dB (thap hon ca anh nhieu 20.9 dB); bat ->
+                               #   24.5 dB. Xem LOG_TRAIN_GIAI_THICH.md
   image_target_blocks:  4
   image_target_scale:   [0.15, 0.25]
   image_target_aspect:  [0.75, 1.5]
@@ -121,14 +126,22 @@ train:
   num_workers: 4
   limit_train_batches: 500    # 0 = full (~2600 batch/epoch). 500 * bs8 = 4000 sample/epoch
   limit_val_batches: 100      # 0 = full. Cat ngan eval cho nhanh
+  eval_mask_seed: 1234        # seed mask khi eval; co dinh de cac epoch so sanh duoc voi nhau
   early_stop:
-    metric: L_jepa            # L_jepa | psnr | rmse_acc | rmse_gyro (key trong val metrics)
-    mode: min                 # min cho loss/rmse, max cho psnr
+    metric: psnr              # L_jepa | psnr | rmse_acc | rmse_gyro (key trong val metrics)
+                              #   KHONG dung L_jepa: no co the ve 0 bang representation
+                              #   collapse, luc do best.pt se luu dung checkpoint hong.
+    mode: max                 # min cho loss/rmse, max cho psnr
     patience: 6               # so epoch lien tiep khong cai thien -> dung. 0 = tat
-    min_delta: 0.001          # cai thien nho hon nguong nay coi nhu khong cai thien
+    min_delta: 0.05           # dB. Cai thien nho hon nguong nay coi nhu khong cai thien
   optimizer: {name: adamw, lr: 1.5e-4, weight_decay: 0.05, warmup_steps: 500}
   ema: {start: 0.996, end: 1.0}
-  loss: {lambda_img: 1.0, lambda_imu: 1.0}
+  loss:
+    lambda_img: 1.0
+    lambda_imu: 1.0
+    lambda_var: 1.0           # luc chong collapse (hinge kieu VICReg tren z_ctx).
+                              #   0 = tat. Tang neu z_std van tut.
+    var_gamma:  1.0           # nguong std moi chieu; chi phat khi TUT DUOI muc nay
   amp: bf16
   grad_clip: 1.0
   log_every: 50
