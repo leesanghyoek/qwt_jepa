@@ -321,12 +321,15 @@ print("  norm_stats :", base["data"]["norm_stats"])
     --batch-size 32 --epochs 1 \
     --limit-train-batches 10 --limit-val-batches 5 --num-workers 4
 
-# DOC KY 4 DONG SAU TRONG OUTPUT, sai bat ky dong nao thi DUNG, dung chay B4:
+# DOC KY 5 DONG SAU TRONG OUTPUT, sai bat ky dong nao thi DUNG, dung chay B4:
 #   norm stats: /kaggle/input/...      <- KHONG duoc la "[canh bao] ... dung identity"
 #   QwtJepa: ... | N tokens 512        <- phai la 512, khong phai 1280
-#   e0 0/10 ... z_std 0.2xx ...        <- z_std quanh 0.25-0.30, KHONG duoc ~0
-#   [eval e0] L_jepa ... PSNR ... dB   <- ra so, khong NaN (PSNR ~3 dB la BINH THUONG:
-#                                         model chua hoc gi, day chi la kiem tra duong ong)
+#   train: ... early_stop psnr (max)   <- phai la psnr/max, KHONG duoc la L_jepa/min.
+#                                         L_jepa co the ve 0 bang collapse -> best.pt
+#                                         se luu dung checkpoint hong.
+#   e0 0/10 ... z_std 0.2xx ctx 0.4xx  <- ctx quanh 0.45-0.50 luc init, KHONG duoc ~0
+#   [eval e0] L_jepa .. z_std .. PSNR  <- ra so, khong NaN (PSNR ~3-4 dB la BINH THUONG:
+#                                         model chua hoc gi, day chi kiem tra duong ong)
 # KHONG dung im/s cua B3 de kiem tra amp: 10 batch thi con so nay bi warmup chi phoi
 # (thuong chi ~13 im/s). Kiem amp o B4 sau vai chuc batch: ~150+ im/s la amp dang an,
 # ~60 im/s la amp chua an (kiem lai base["train"]["amp"] = "fp16" o Cell B2).
@@ -342,7 +345,7 @@ print("  norm_stats :", base["data"]["norm_stats"])
 # batch_size thi phai chinh lr theo ti le tuyen tinh (batch x2 -> lr x2).
 # KHONG con chay het 2600 batch/epoch: base.yaml da dat train.limit_train_batches
 # (mac dinh 500) + train.limit_val_batches (100) + train.early_stop (patience 6 tren
-# val L_jepa). Uoc tinh tren Kaggle (4 vCPU nen dataloader la nut co chai, ~130 sample/s):
+# val PSNR, mode max - KHONG con la L_jepa). Uoc tinh tren Kaggle (4 vCPU nen dataloader la nut co chai, ~130 sample/s):
 #   500 batch x 32 = 16000 sample/epoch -> ~2 phut train + ~25s eval = ~2.5 phut/epoch
 #   40 epoch  ->  ~1.7 gio, gon trong 1 phien 12h. Bo --epochs de dung epochs=40
 # trong config (tran cung); early_stop thuong dung truoc do.
@@ -445,9 +448,39 @@ else:
 
 3. Save Version. Lap lai cho den khi log in "xong."
 
-CANH BAO khi resume: checkpoint luu TRUOC ngay 2026-09-09 dung token_patch_image=8,
-khong nap duoc vao model hien tai (=16) -> load_state_dict se bao loi shape. Phai train
-lai tu dau, KHONG dung --resume voi checkpoint cu.
+CANH BAO khi resume - CO HAI MOC KHONG TUONG THICH NGUOC:
+  a) checkpoint TRUOC 2026-09-09 dung token_patch_image=8 -> lech shape.
+  b) checkpoint TRUOC ban va collapse (commit "fix: chan representation collapse")
+     thieu target_tokenizer, VA quan trong hon: chung deu DA COLLAPSE
+     (z_std tut dan, L_jepa ~0.01, PSNR ~10 dB) nen khong co gi de cuu.
+train.py bay gio bao loi ro rang thay vi stack trace neu gap ca hai truong hop.
+=> Lan train dau tien sau khi keo ban fix: BO --resume, train lai tu dau.
+
+
+================================================================================
+ C2. THEO DOI z_std - VIEC QUAN TRONG NHAT KHI TRAIN
+================================================================================
+Model nay tung collapse toan bo trong epoch 0. Dau hieu nam o z_std, khong nam o loss.
+
+Sau moi epoch, dong [eval eN] in ra z_std (chinh la std cua z_ctx tren tap val):
+
+  LANH:  z_std leo tu ~0.45 len ~0.95 trong 3-5 epoch dau roi DUNG VUNG quanh 0.9-1.0
+  HONG:  z_std tut dan ve 0.1-0.2  -> collapse, dung train, bao lai
+
+Ba dieu de KHONG hoang mang:
+  1. L_jepa co the TANG trong vai epoch dau. Do la dau hieu TOT: z_ctx dang bung ra,
+     z_tgt bam theo qua EMA, bai toan du doan tro nen kho THAT SU. Chi lo khi z_std tut.
+  2. L_var (trong dong log train) tut dan ve ~0 nghia la rang buoc chong collapse da
+     duoc thoa man. Neu no ket tren 0.3 nhieu epoch thi tang train.loss.lambda_var.
+  3. PSNR ~3-4 dB luc dau la binh thuong (recon head chua hoc gi, dau ra khong bi chan).
+
+Cac moc PSNR de doi chieu (do that tren tap valid, xem LOG_TRAIN_GIAI_THICH.md):
+  14.0 dB  = doan mau trung binh cua anh   (san vo dung)
+  20.9 dB  = chinh anh nhieu dau vao       (nguong PHAI vuot)
+  24.5 dB  = tran kien truc voi masking hien tai
+Muon do lai cac moc nay tren dung du lieu Kaggle:
+  !python -m qwt_jepa.scripts.baseline_metrics --config qwt_jepa/configs/kaggle.yaml \
+      --split valid --n 128
 
 
 ================================================================================

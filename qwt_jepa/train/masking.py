@@ -35,6 +35,25 @@ def _rand(lo: float, hi: float, gen: torch.Generator | None) -> float:
     return lo + (hi - lo) * float(torch.rand(1, generator=gen).item())
 
 
+def coarse_tokens(layout: TokenLayout) -> set[int]:
+    """Token cua dai THO nhat: anh = LL, imu = A.
+
+    Chi la vai token (anh: 4 / 512) nhung mang gan het do sang va bo cuc. Neu bi
+    vut va thay bang `missing_token` thi recon head khong con duong nao dung lai
+    anh: do thuc te cho thay tran PSNR (he so hoan hao, chi mat token bi vut)
+    tut tu ~25 dB xuong ~17.5 dB, tuc la THAP HON ca anh nhieu dau vao (20.9 dB).
+    Vi vay luon giu chung trong context, khong bao gio lam target.
+    """
+    out: set[int] = set()
+    for e in layout.image_entries:
+        if e.band == "LL":
+            out.update(range(e.start, e.end))
+    for e in layout.imu_entries:
+        if e.band == "A":
+            out.update(range(e.start, e.end))
+    return out
+
+
 def _image_target_tokens(
     layout: TokenLayout,
     n_blocks: int,
@@ -118,16 +137,26 @@ def sample_masks(
         target = img_tgt if torch.rand(1, generator=generator).item() < 0.5 else imu_tgt
 
     all_idx = set(range(layout.n_tokens))
-    target = target or {next(iter(all_idx))}
+    protect = coarse_tokens(layout) if bool(m.get("protect_coarse", True)) else set()
+    target = target - protect
+    target = target or {next(iter(all_idx - protect))}
     context_full = sorted(all_idx - target)
     if not context_full:                       # an toan: chua bao gio de trong
         context_full = [sorted(target)[0]]
         target = target - {context_full[0]}
 
+    # Lay mau thua trong nhom KHONG duoc bao ve, roi ghep nguyen nhom bao ve vao.
+    # Tong so token giu lai van xap xi keep_ratio * len(context_full) nhu cu.
     keep_ratio = float(m["context_keep_ratio"])
-    n_keep = max(1, int(round(len(context_full) * keep_ratio)))
-    perm = torch.randperm(len(context_full), generator=generator)[:n_keep]
-    context_kept = sorted(context_full[i] for i in perm.tolist())
+    droppable = [i for i in context_full if i not in protect]
+    n_protected = len(context_full) - len(droppable)
+    n_keep = max(0, min(len(droppable), int(round(len(context_full) * keep_ratio)) - n_protected))
+    perm = torch.randperm(len(droppable), generator=generator)[:n_keep]
+    context_kept = sorted(protect.intersection(context_full).union(
+        droppable[i] for i in perm.tolist()
+    ))
+    if not context_kept:                       # an toan: context khong duoc rong
+        context_kept = [context_full[0]]
 
     return MaskIndices(
         context_index=torch.tensor(context_kept, dtype=torch.long),

@@ -142,7 +142,18 @@ def main() -> None:
     es_bad = 0
     if args.resume and pathlib.Path(args.resume).exists():
         ck = torch.load(args.resume, map_location=device)
-        model.load_state_dict(ck["model"])
+        _stale = (
+            f"\n{args.resume} khong khop voi model hien tai.\n"
+            "Neu day la checkpoint TRUOC khi sua collapse thi khong dung lai duoc: chung deu\n"
+            "da collapse (z_std tut dan, L_jepa ~0.01, PSNR ~10 dB).\n"
+            "Bo --resume de train lai tu dau. Xem LOG_TRAIN_GIAI_THICH.md muc 9."
+        )
+        try:
+            missing, _ = model.load_state_dict(ck["model"], strict=False)
+        except RuntimeError as e:                      # lech shape (doi config kien truc)
+            sys.exit(f"{_stale}\n\nChi tiet: {e}")
+        if missing:
+            sys.exit(f"{_stale}\n\nThieu key: {missing[:5]}")
         optimizer.load_state_dict(ck["optimizer"])
         scheduler.load_state_dict(ck["scheduler"])
         if ck.get("scaler") is not None:
@@ -178,7 +189,8 @@ def main() -> None:
         )
         metrics = evaluate(model, val_loader, cfg, device, max_batches=lim_val)
         print(
-            f"[eval e{epoch}] L_jepa {metrics['L_jepa']:.4f} | PSNR {metrics['psnr']:.2f} dB | "
+            f"[eval e{epoch}] L_jepa {metrics['L_jepa']:.4f} | z_std {metrics['zctx_std']:.3f} | "
+            f"PSNR {metrics['psnr']:.2f} dB | "
             f"RMSE acc {metrics['rmse_acc']:.4f} gyro {metrics['rmse_gyro']:.4f}",
             flush=True,
         )

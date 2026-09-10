@@ -39,6 +39,16 @@ def make_scaler(cfg: dict, device: torch.device):
     return torch.amp.GradScaler("cuda", enabled=on)
 
 
+def _loss_kwargs(cfg: dict) -> dict:
+    lam = cfg["train"]["loss"]
+    return dict(
+        lambda_img=float(lam.get("lambda_img", 1.0)),
+        lambda_imu=float(lam.get("lambda_imu", 1.0)),
+        lambda_var=float(lam.get("lambda_var", 0.0)),
+        var_gamma=float(lam.get("var_gamma", 1.0)),
+    )
+
+
 def train_one_epoch(
     model,
     loader,
@@ -52,7 +62,7 @@ def train_one_epoch(
     scaler=None,
 ) -> int:
     model.train()
-    lam = cfg["train"]["loss"]
+    lam_kw = _loss_kwargs(cfg)
     ema_cfg = cfg["train"]["ema"]
     grad_clip = float(cfg["train"].get("grad_clip", 0) or 0)
     log_every = int(cfg["train"].get("log_every", 50))
@@ -63,7 +73,7 @@ def train_one_epoch(
 
         with _autocast(cfg, device):
             out = model(batch)
-            loss, logs = total_loss(out, batch, lam["lambda_img"], lam["lambda_imu"])
+            loss, logs = total_loss(out, batch, **lam_kw)
 
         optimizer.zero_grad(set_to_none=True)
         if scaler is not None and scaler.is_enabled():
@@ -90,8 +100,10 @@ def train_one_epoch(
             print(
                 f"e{epoch} {i:4d}/{len(loader)} step {step:6d} | "
                 f"L {logs['L_total']:.4f} (jepa {logs['L_jepa']:.4f} "
-                f"img {logs['L_img']:.4f} imu {logs['L_imu']:.4f}) | "
-                f"z_std {logs['ztgt_std']:.3f} | lr {lr:.2e} m {m:.4f} | {ips:.1f} im/s",
+                f"img {logs['L_img']:.4f} imu {logs['L_imu']:.4f} "
+                f"var {logs['L_var']:.4f}) | "
+                f"z_std {logs['ztgt_std']:.3f} ctx {logs['zctx_std']:.3f} | "
+                f"lr {lr:.2e} m {m:.4f} | {ips:.1f} im/s",
                 flush=True,
             )
     return step
@@ -100,17 +112,23 @@ def train_one_epoch(
 @torch.no_grad()
 def evaluate(model, loader, cfg: dict, device: torch.device, max_batches: int = 0) -> dict:
     model.eval()
-    lam = cfg["train"]["loss"]
+    lam_kw = _loss_kwargs(cfg)
     n = 0
-    agg = {"L_jepa": 0.0, "psnr": 0.0, "rmse_acc": 0.0, "rmse_gyro": 0.0}
+    agg = {"L_jepa": 0.0, "psnr": 0.0, "rmse_acc": 0.0, "rmse_gyro": 0.0, "zctx_std": 0.0}
+
+    # Mask phai CO DINH giua cac epoch, neu khong moi epoch se do tren mot bo mask
+    # khac nhau -> val metric nhieu hon ca early_stop.min_delta -> best.pt chi la
+    # epoch boc trung mask de, va patience co the kich hoat vi nhieu chu khong vi
+    # hoi tu. Tao lai generator moi lan goi evaluate => cung mot chuoi mask.
+    gen = torch.Generator().manual_seed(int(cfg["train"].get("eval_mask_seed", 1234)))
 
     for bi, batch in enumerate(loader):
         if max_batches and bi >= max_batches:
             break
         batch = _to_device(batch, device)
         with _autocast(cfg, device):
-            out = model(batch)
-        _, logs = total_loss(out, batch, lam["lambda_img"], lam["lambda_imu"])
+            out = model(batch, generator=gen)
+        _, logs = total_loss(out, batch, **lam_kw)
 
         b = batch["img_clean"].shape[0]
         mse = torch.mean((out["img_rec"].float() - batch["img_clean"].float()) ** 2).item()
@@ -123,6 +141,7 @@ def evaluate(model, loader, cfg: dict, device: torch.device, max_batches: int = 
         ).item()
 
         agg["L_jepa"] += logs["L_jepa"] * b
+        agg["zctx_std"] += logs["zctx_std"] * b
         agg["psnr"] += psnr * b
         agg["rmse_acc"] += rmse_acc * b
         agg["rmse_gyro"] += rmse_gyro * b
