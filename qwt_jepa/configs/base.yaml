@@ -54,7 +54,23 @@ corruption:                       # sinh on-the-fly, co seed; KHONG luu ban nois
     couple:        0.0             # 0 = TACH nhoe khoi bien 'dieu kien chup'. Voi couple
                                    #   0.70 cu, dieu kien tot -> length ~0 -> da so mau NET.
     p_blur:        1.0             # luon lam nhoe
-    blur_kernel:   [4, 14]         # do dai motion blur (px) - luon nhoe THAT SU
+    blur_from_imu: true            # Sinh nhoe TU GYRO thay vi boc ngau nhien.
+                                   #   Truoc day angle = uniform(0,180) va length boc
+                                   #   ngau nhien, HOAN TOAN doc lap voi IMU - nen khong
+                                   #   co quan he nao de model hoc, va y tuong "dung IMU
+                                   #   de khu nhoe" khong co co so trong du lieu.
+                                   #   Nhoe chuyen dong chinh la tich phan chuyen dong
+                                   #   camera trong luc phoi sang, ma gyro do dung thu do.
+    focal_px:      320.0           # 640x640, FOV 90 do
+    exposure_time: [0.020, 0.050]  # 1/50 - 1/20 s. Do quet tren du lieu that:
+                                   #   [0.010,0.025] -> nhoe p50 2 px, anh mo hon sach 14%
+                                   #   [0.020,0.050] -> nhoe p50 5 px, mo hon sach 25%  <- chon
+                                   #   [0.040,0.090] -> nhoe p50 9 px, mo hon sach 36%
+                                   #   Chon muc giua: DUNG BANG do kho cua config ngau nhien
+                                   #   truoc day (mo hon sach 25%), nhung gio nhoe DU DOAN
+                                   #   DUOC tu gyro (tuong quan 0.893, truoc day 0.000).
+    imu_rate:      100.0
+    blur_kernel:   [0, 32]         # khi blur_from_imu: CHI con dung lam tran chan tren
     exposure:      [0.95, 1.05]    # lech sang nhe thoi, de model tap trung vao nhoe
     p_illum:       0.20
     illum_depth:   [0.05, 0.15]

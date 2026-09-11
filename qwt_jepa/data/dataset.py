@@ -115,12 +115,16 @@ class PairedNoisyCleanDataset(Dataset):
         row = self.rows[idx]
 
         img_clean = self._load_image(row["image_path"])                     # [3, H, W] in [0,1]
-        imu_clean = self.normalizer(self._load_imu(row))                    # [128, 6] chuan hoa
+        imu_raw = self._load_imu(row)                                       # [128, 6] THO
+        imu_clean = self.normalizer(imu_raw)                                # [128, 6] chuan hoa
 
         rng = np.random.default_rng(
             _stable_seed(row["env"], row["traj"], row["frame_idx"], self.epoch)
         )
-        img_noisy = corrupt_image(img_clean, rng, self.corr_img_cfg)
+        # Truyen gyro THO (rad/s, chua chuan hoa) de sinh nhoe tu chinh chuyen dong
+        # camera - xem corruption.blur_from_gyro. Neu corruption.image.blur_from_imu
+        # = false thi tham so nay bi bo qua.
+        img_noisy = corrupt_image(img_clean, rng, self.corr_img_cfg, gyro=imu_raw[:, 3:6])
         imu_noisy = corrupt_imu(imu_clean, rng, self.corr_imu_cfg, sr=self.sr)
 
         return {

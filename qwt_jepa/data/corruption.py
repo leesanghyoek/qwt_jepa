@@ -258,7 +258,42 @@ def _vignette(shape: tuple, strength: float, cy: float = 0.0, cx: float = 0.0,
     return (1.0 - strength * np.power(r2 * 0.5, power)).astype(np.float32)
 
 
-def corrupt_image(img: np.ndarray, rng: np.random.Generator, cfg: dict) -> np.ndarray:
+def blur_from_gyro(gyro: np.ndarray, cfg: dict, rng: np.random.Generator) -> tuple[int, float]:
+    """Suy do dai + huong motion blur TU GYRO. Tra (length_px, angle_deg).
+
+    Vi sao: nhoe chuyen dong CHINH LA tich phan chuyen dong camera trong thoi gian phoi
+    sang, ma gyro do dung thu do. Quay quanh truc x (ngang) -> anh truot doc; quanh truc
+    y (doc) -> anh truot ngang. Dich chuyen tren anh = omega * T_phoi_sang * f.
+
+    Truoc day `angle` boc uniform(0, 180) va `length` boc ngau nhien - HOAN TOAN doc lap
+    voi IMU. Nghia la khong co quan he nao de model hoc, va toan bo y tuong "dung IMU de
+    khu nhoe" khong co co so trong du lieu. Day la cho sua dieu do.
+
+    Do tren du lieu that (gyro |omega|): p25 0.35, p50 0.58, p90 1.69 rad/s.
+    Voi f=320 px (640x640, FOV 90 do) va phoi sang 1/50 s -> nhoe 2.3-10.8 px, khop
+    voi dai blur_kernel [4, 14] dang dung.
+    """
+    f = float(cfg.get("focal_px", 320.0))
+    t_lo, t_hi = cfg.get("exposure_time", (0.01, 0.025))
+    T = float(t_lo) + (float(t_hi) - float(t_lo)) * float(rng.random())
+
+    n = max(1, int(round(T * float(cfg.get("imu_rate", 100.0)))))
+    w = gyro[-n:]                                  # cua so phoi sang = sat truoc thoi diem chup
+    wx, wy = float(w[:, 0].mean()), float(w[:, 1].mean())
+
+    length = int(round(f * T * float(np.hypot(wx, wy))))
+    lo, hi = cfg.get("blur_kernel", (0, 32))
+    length = int(np.clip(length, 0, int(hi)))
+    angle = float(np.degrees(np.arctan2(wx, wy)))  # quay quanh y -> truot ngang (goc 0)
+    return length, angle
+
+
+def corrupt_image(
+    img: np.ndarray,
+    rng: np.random.Generator,
+    cfg: dict,
+    gyro: np.ndarray | None = None,
+) -> np.ndarray:
     x = img.astype(np.float32, copy=True)
 
     # 1. motion blur - quang hoc, TRUOC nhieu sensor; goc bat ky (khong chi ngang/doc)
@@ -281,10 +316,14 @@ def corrupt_image(img: np.ndarray, rng: np.random.Generator, cfg: dict) -> np.nd
     c_lo, c_hi = cfg.get("condition", (0.0, 1.0))
     bad = float(c_lo) + (float(c_hi) - float(c_lo)) * float(rng.random()) ** k
 
-    length = 0
+    length, angle = 0, float(rng.uniform(0.0, 180.0))
     if _hit(rng, cfg, "p_blur"):                   # phan con lai la khung NET hoan toan
-        length = int(round(_sev(rng, cfg.get("blur_kernel", (0, 0)), k, u=bad, couple=cpl)))
-    angle = float(rng.uniform(0.0, 180.0))
+        if bool(cfg.get("blur_from_imu", False)) and gyro is not None:
+            # Nhoe suy TU GYRO -> IMU thuc su du doan duoc nhoe, va viec ghep hai
+            # modality moi co co so. Xem blur_from_gyro().
+            length, angle = blur_from_gyro(gyro, cfg, rng)
+        else:
+            length = int(round(_sev(rng, cfg.get("blur_kernel", (0, 0)), k, u=bad, couple=cpl)))
     x = _motion_blur(x, length, angle, rng)
 
     # 2. exposure trong mien LINEAR-LIGHT (nhan tren sRGB la sai vat ly)
