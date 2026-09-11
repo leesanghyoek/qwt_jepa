@@ -162,7 +162,19 @@ train:
     mode: max                 # min cho loss/rmse, max cho psnr
     patience: 6               # so epoch lien tiep khong cai thien -> dung. 0 = tat
     min_delta: 0.05           # dB. Cai thien nho hon nguong nay coi nhu khong cai thien
-  optimizer: {name: adamw, lr: 1.5e-4, weight_decay: 0.05, warmup_steps: 500}
+  optimizer:
+    name: adamw
+    lr: 1.5e-4
+    weight_decay: 0.05
+    warmup_steps: 500
+    head_lr_mult: 10.0        # 2 recon head hoc nhanh hon phan con lai bao nhieu lan.
+                              #   Head khoi tao BANG 0 (recon_gate) nen phai bo len tu
+                              #   con so khong, trong khi phan con lai chi can tinh chinh.
+                              #   Voi cung lr va 300 buoc/epoch, sau 7 epoch head van
+                              #   chua roi diem xuat phat: L_img dung o 0.045 (moc copy
+                              #   la 0.042) va RMSE imu dung im o chu so thu tu.
+                              #   Theo doi cot `gate` trong log train: van ~0 sau vai
+                              #   epoch nghia la van chua du nhanh, tang tiep.
   ema: {start: 0.996, end: 1.0}
   loss:
     lambda_img: 1.0

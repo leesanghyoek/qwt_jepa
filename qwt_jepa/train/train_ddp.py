@@ -46,7 +46,7 @@ from qwt_jepa.models.jepa import QwtJepa                                  # noqa
 from qwt_jepa.train import ema_momentum                                   # noqa: E402
 from qwt_jepa.train.losses import sharpness, total_loss                             # noqa: E402
 from qwt_jepa.train.engine import _loss_kwargs, make_scaler              # noqa: E402
-from qwt_jepa.train.train import _improved, build_scheduler             # noqa: E402
+from qwt_jepa.train.train import _improved, build_optimizer, build_scheduler   # noqa: E402
 
 
 def ddp_setup() -> tuple[bool, int, int, int]:
@@ -179,11 +179,9 @@ def main() -> None:
     else:
         log("band_norm: OFF")
 
-    ocfg = cfg["train"]["optimizer"]
-    optimizer = torch.optim.AdamW(
-        (p for p in core.parameters() if p.requires_grad),
-        lr=float(ocfg["lr"]), weight_decay=float(ocfg["weight_decay"]), betas=(0.9, 0.95),
-    )
+    optimizer, _mult, _nh = build_optimizer(core, cfg)
+    if _mult != 1.0:
+        log(f"head_lr_mult: {_mult}  ({_nh} tensor cua 2 recon head hoc nhanh hon x{_mult})")
 
     tcfg = cfg["train"]
     lim_train = args.limit_train_batches or int(tcfg.get("limit_train_batches", 0) or 0)
@@ -347,6 +345,7 @@ def main() -> None:
                     f"L {logs['L_total']:.4f} (jepa {logs['L_jepa']:.4f} "
                     f"img {logs['L_img']:.4f} imu {logs['L_imu']:.4f} "
                     f"band {logs['L_band']:.4f} var {logs['L_var']:.4f}) | "
+                    f"gate {logs['gate']:.4f} | "
                     f"z_std {logs['ztgt_std']:.3f} ctx {logs['zctx_std']:.3f} | "
                     f"lr {lr:.2e} m {m:.4f} | {ips:.1f} im/s",
                     flush=True,

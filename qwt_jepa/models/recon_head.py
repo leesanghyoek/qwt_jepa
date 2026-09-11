@@ -74,6 +74,7 @@ class ImageHead(nn.Module):
             nn.init.zeros_(self.proj.bias)
         # Doi xung voi Tokenizer: head du doan he so DA CHUAN HOA roi nhan lai scale.
         self.register_buffer("band_scale", torch.ones(len(layout.image_entries)))
+        self.gate_abs = 0.0          # chi de theo doi, khong tham gia tinh toan
 
     def forward(
         self,
@@ -96,6 +97,10 @@ class ImageHead(nn.Module):
             norm = self.proj(tok)                                 # he so da chuan hoa
             if self.gate:
                 g, d = norm.chunk(2, dim=-1)
+                # Theo doi bien do gate: proj khoi tao bang 0 nen luc dau gate = 0
+                # (dau ra = anh vao). Neu sau nhieu epoch gate VAN ~0 thi head chua
+                # roi diem xuat phat - la van de toc do hoc, khong phai hoc sai.
+                self.gate_abs = float(g.detach().abs().mean())
                 norm = raw_p * (1.0 + g) + d
             if bands_out is not None:
                 bands_out[(e.level, e.band)] = norm
@@ -121,6 +126,7 @@ class ImuHead(nn.Module):
             nn.init.zeros_(self.proj.weight)
             nn.init.zeros_(self.proj.bias)
         self.register_buffer("band_scale", torch.ones(len(layout.imu_entries)))
+        self.gate_abs = 0.0          # chi de theo doi, khong tham gia tinh toan
 
     def forward(
         self,
@@ -142,6 +148,7 @@ class ImuHead(nn.Module):
             norm = self.proj(tok)                         # he so da chuan hoa
             if self.gate:
                 g, d = norm.chunk(2, dim=-1)
+                self.gate_abs = float(g.detach().abs().mean())
                 norm = raw * (1.0 + g) + d
             if bands_out is not None:
                 bands_out[(e.group, e.level, e.band)] = norm

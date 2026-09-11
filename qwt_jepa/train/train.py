@@ -70,6 +70,33 @@ def _improved(cur: float, best: float, mode: str, min_delta: float) -> bool:
     return cur < best - min_delta
 
 
+def build_optimizer(model, cfg: dict):
+    """AdamW voi nhom rieng cho 2 recon head.
+
+    Head duoc khoi tao BANG 0 (de dau ra bat dau dung bang anh vao) nen no phai bo len
+    tu con so khong, trong khi phan con lai cua model khoi tao ngau nhien va chi can
+    tinh chinh. Voi cung mot lr va limit_train_batches 300 thi sau 7 epoch (2100 buoc)
+    head gan nhu chua roi diem xuat phat - quan sat duoc: L_img dung o 0.045 dung bang
+    moc "copy dau vao" 0.042, va RMSE imu dung im o chu so thu tu qua 7 epoch.
+    head_lr_mult cho head hoc nhanh hon phan con lai. Theo doi cot `gate` trong log:
+    van ~0 sau vai epoch = van chua du nhanh.
+    """
+    ocfg = cfg["train"]["optimizer"]
+    lr = float(ocfg["lr"])
+    mult = float(ocfg.get("head_lr_mult", 1.0))
+    head, rest = [], []
+    for n, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        (head if n.startswith(("image_head.", "imu_head.")) else rest).append(p)
+    groups = [{"params": rest, "lr": lr}]
+    if head:
+        groups.append({"params": head, "lr": lr * mult})
+    return torch.optim.AdamW(
+        groups, lr=lr, weight_decay=float(ocfg["weight_decay"]), betas=(0.9, 0.95)
+    ), mult, len(head)
+
+
 def build_scheduler(optimizer, cfg: dict, total_steps: int):
     warmup = int(cfg["train"]["optimizer"].get("warmup_steps", 0))
 
@@ -140,13 +167,9 @@ def main() -> None:
     else:
         print("band_norm: OFF")
 
-    ocfg = cfg["train"]["optimizer"]
-    optimizer = torch.optim.AdamW(
-        (p for p in model.parameters() if p.requires_grad),
-        lr=float(ocfg["lr"]),
-        weight_decay=float(ocfg["weight_decay"]),
-        betas=(0.9, 0.95),
-    )
+    optimizer, _mult, _nh = build_optimizer(model, cfg)
+    if _mult != 1.0:
+        print(f"head_lr_mult: {_mult}  ({_nh} tensor cua 2 recon head hoc nhanh hon x{_mult})")
 
     tcfg = cfg["train"]
     lim_train = args.limit_train_batches or int(tcfg.get("limit_train_batches", 0) or 0)

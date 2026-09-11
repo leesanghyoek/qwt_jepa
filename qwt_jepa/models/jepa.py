@@ -209,6 +209,8 @@ class QwtJepa(nn.Module):
             "imu_bands": imu_bands,
             "img_bands_tgt": img_bands_tgt,
             "imu_bands_tgt": imu_bands_tgt,
+            # bien do gate cua image_head - 0 nghia la head chua roi khoi khoi tao
+            "gate_abs": getattr(self.image_head, "gate_abs", 0.0),
             "mask": mask,
         }
 

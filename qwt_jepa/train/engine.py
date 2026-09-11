@@ -103,6 +103,7 @@ def train_one_epoch(
                 f"L {logs['L_total']:.4f} (jepa {logs['L_jepa']:.4f} "
                 f"img {logs['L_img']:.4f} imu {logs['L_imu']:.4f} "
                 f"band {logs['L_band']:.4f} var {logs['L_var']:.4f}) | "
+                f"gate {logs['gate']:.4f} | "
                 f"z_std {logs['ztgt_std']:.3f} ctx {logs['zctx_std']:.3f} | "
                 f"lr {lr:.2e} m {m:.4f} | {ips:.1f} im/s",
                 flush=True,
