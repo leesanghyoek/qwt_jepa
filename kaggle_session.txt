@@ -570,13 +570,16 @@ CMD = ["torchrun", "--standalone", "--nproc_per_node=2",
        "qwt_jepa/train/train_ddp.py",
        "--config", "qwt_jepa/configs/kaggle.yaml",
        "--out", "/kaggle/working/runs/base",
-       "--batch-size", "16", "--num-workers", "2"]
+       "--batch-size", "8", "--num-workers", "2"]
 
 HAI CHO DE SAI:
 
-1. --batch-size la batch MOI GPU. Dat 16 x 2 GPU = batch hieu dung 32, DUNG BANG cac
-   run 1 GPU truoc day -> so sanh truc tiep duoc, khong phai chinh lr.
-   Neu dat 32/GPU thi batch hieu dung la 64 -> phai nhan doi lr (1.5e-4 -> 3e-4).
+1. --batch-size la batch MOI GPU, va no GHI DE train.batch_size trong config.
+   Quy tac: muon batch hieu dung bang B thi dat --batch-size B/2 (voi 2 GPU).
+   base.yaml dang de batch_size 16, nen dung "--batch-size 8" -> hieu dung 16,
+   GIU NGUYEN lich lr hien tai, so sanh truc tiep duoc voi run 1 GPU.
+   Neu dat 16/GPU thi hieu dung thanh 32 -> phai nhan doi lr (1.5e-4 -> 3e-4).
+   Dong log dau in "batch hieu dung ..." - doc dong do de kiem tra.
 
 2. --num-workers la MOI tien trinh. Kaggle co 4 vCPU, 2 tien trinh x 2 worker = 4.
    Dat 4/tien trinh la 8 worker tren 4 vCPU -> tranh CPU, CHAM HON.
@@ -592,7 +595,7 @@ khong phai them GPU.
 
 KIEM TRA dang chay 2 GPU that:
     !nvidia-smi        # phai thay CA HAI the co tien trinh python va %util > 0
-Dong log dau tien cung phai in: "world 2 | batch/gpu 16 | batch hieu dung 32"
+Dong log dau tien cung phai in: "world 2 | batch/gpu 8 | batch hieu dung 16"
 
 RESUME: phai giu NGUYEN so GPU + batch-size + epochs. total_steps = epochs *
 limit_train_batches nen doi so GPU se lam lech lich LR/EMA. Checkpoint co luu
