@@ -38,32 +38,37 @@ corruption:                       # sinh on-the-fly, co seed; KHONG luu ban nois
   # vignette, so lan loc mau, co hat chroma, ti le tron rung, so hoa ba, he so spike,
   # buoc ADC) de model khong hoc thuoc mot phep bien doi co dinh roi dao nguoc.
   image:
-    condition:     [0.10, 1.0]     # [san, tran] cua bien an 'dieu kien chup'. San 0.10
-                                   #   dam bao khong bao gio co dieu kien HOAN HAO -> khong
-                                   #   sinh ra cap (sach, gan nhu sach). Dat [0, 1] de tat.
-    couple:        0.70            # RANG BUOC do sang <-> do nhoe <-> muc nhieu qua mot
-                                   #   bien an 'dieu kien chup'. Camera thieu sang phai chon
-                                   #   phoi lau (nhoe) hoac tang ISO (nhieu), va van ra anh
-                                   #   toi -> ba thu di CUNG NHAU. 0 = doc lap nhu cu.
-    p_blur:        0.85            # de do dai quyet dinh: dieu kien tot -> length ~0 -> net
-    blur_kernel:   [0, 13]         # do dai motion blur (px), goc + quy dao ngau nhien
-    exposure:      [0.70, 1.10]    # THIEU ANH SANG NHE: da so anh toi di ~10% -> model phai hoc
-                                   #   TANG DO SANG, khong chi khu nhieu. Van chua ~12% anh
-                                   #   sang hon binh thuong de model phai UOC LUONG muc can
-                                   #   bu, thay vi hoc thuoc 'luon nhan len mot he so'.
-    p_illum:       0.60            # chieu sang KHONG DEU theo khong gian (den lech phia,
-    illum_depth:   [0.10, 0.45]    #   vat che bong) - vung toi nhat bi giam toi muc nay
-    p_vignette:    0.7
-    vignette:      [0.10, 0.35]    # lens shading; tam quang hoc LECH ngau nhien moi sample
-    bayer:         true            # pipeline RAW kieu Unprocessing (CVPR'19); pha CFA
-    wb_gains:      [1.2, 2.4]      #   (RGGB/GRBG/GBRG/BGGR) boc ngau nhien tung sample
-    shot_noise:    [0.02, 0.10]    # shot noise photon (sinh o mien RAW)
-    gauss_std:     [0.005, 0.030]  # read noise mach doc (sinh o mien RAW)
-    p_chroma:      0.5
-    chroma_noise:  [0.005, 0.016]  # dom mau tan so thap, co hat ngau nhien 8..32 px
-    chroma_denoise: [0, 2]         # so lan loc mau cua ISP, boc ngau nhien trong khoang
-    p_jpeg:        0.85
-    jpeg_q:        [45, 95]        # JPEG THAT; pha luoi 8x8 lech ngau nhien 0..7 px
+    # === CHE DO: NHOE CHI PHOI ===
+    # Muc tieu cua project la lam anh NET HON dau vao. Muc tieu do chi co nghia khi
+    # dau vao MO HON anh sach. Do that tren tap valid (do net = |gradient| trung binh):
+    #     anh sach                      0.0587
+    #     config cu (nhieu chi phoi)    0.0678  <- NET GIA hon ca anh sach!
+    #     config nay (nhoe chi phoi)    0.0406  <- mo hon sach 31%, muc tieu co nghia
+    # Va bo loc tuyen tinh TOI UU:
+    #     tren config cu    : net hon dau vao -27%  (buoc phai lam muot de xoa nhieu)
+    #     tren config nay   : net hon dau vao  +5%, dat 73% do net anh sach
+    # Phan ra thanh phan cua config CU: nhieu hat+JPEG 3.14 dB, lech sang 2.44 dB,
+    # nhoe chi 0.80 dB - tuc la no gan nhu KHONG day model hoc khu nhoe.
+    # Muon quay lai che do cu: xem git 691423a.
+    condition:     [0.0, 1.0]
+    couple:        0.0             # 0 = TACH nhoe khoi bien 'dieu kien chup'. Voi couple
+                                   #   0.70 cu, dieu kien tot -> length ~0 -> da so mau NET.
+    p_blur:        1.0             # luon lam nhoe
+    blur_kernel:   [4, 14]         # do dai motion blur (px) - luon nhoe THAT SU
+    exposure:      [0.95, 1.05]    # lech sang nhe thoi, de model tap trung vao nhoe
+    p_illum:       0.20
+    illum_depth:   [0.05, 0.15]
+    p_vignette:    0.30
+    vignette:      [0.05, 0.15]
+    bayer:         true            # van giu pipeline RAW, chi ha muc nhieu
+    wb_gains:      [1.2, 2.4]
+    shot_noise:    [0.001, 0.006]  # nhieu hat xuong RAT NHE: no che mat tin hieu nhoe
+    gauss_std:     [0.001, 0.004]
+    p_chroma:      0.1
+    chroma_noise:  [0.002, 0.006]
+    chroma_denoise: [0, 2]
+    p_jpeg:        0.3
+    jpeg_q:        [80, 98]
     severity_skew: 1.5
   imu:
     gauss_std:   [0.02, 0.07]      # white noise (angle/velocity random walk)

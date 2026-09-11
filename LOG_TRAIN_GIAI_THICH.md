@@ -23,14 +23,19 @@ python -m qwt_jepa.scripts.baseline_metrics --split valid --n 128
 | `L_jepa`/`pos` | ≥ 1.0 | < 1.0 | < 0.5 | < 0.2 | 🔴 ≥ 1.0 = tệ hơn đoán bừa theo vị trí |
 | `L_var` | — | — | < 0.1 | ≈ 0 | 🔴 > 0.3 kéo dài = `z_ctx` chưa bung ra |
 | `L_jepa` | ≈ 0.42 | < 0.29 | 0.08 – 0.17 | < 0.05 | 🔴 < 0.02 kèm `z_std` tụt |
-| `PSNR` | 14.0 dB | **20.9 dB** | 18 – 22 dB | > 24 dB | đứng im khi `L_jepa` giảm |
-| `RMSE acc` | 1.0 | **0.117** | < 0.08 | < 0.05 | — |
-| `RMSE gyro` | 1.0 | **0.121** | < 0.08 | < 0.05 | — |
-| `L_img` | 0.193 | **0.076** | < 0.06 | < 0.04 | — |
-| `L_imu` | ≈ 1.6 | **0.177** | < 0.15 | < 0.10 | — |
+| `PSNR` | 14.0 dB | **24.5 dB** | 25 – 27 dB | > 28 dB | đứng im khi `L_jepa` giảm |
+| `RMSE acc` | 1.0 | **0.115** | < 0.08 | < 0.05 | — |
+| `RMSE gyro` | 1.0 | **0.117** | < 0.08 | < 0.05 | — |
+| `L_img` | 0.193 | **0.042** | < 0.035 | < 0.025 | — |
+| `L_imu` | ≈ 1.6 | **0.171** | < 0.15 | < 0.10 | — |
 
 **Đọc theo thứ tự ưu tiên:** `z_std` → `PSNR` + `RMSE` → `L_jepa`.
 Không bao giờ đánh giá model chỉ bằng `L` hoặc chỉ bằng `L_jepa`.
+
+> ⚠️ Các mốc trên ứng với `corruption.image` ở chế độ **NHOÈ CHI PHỐI** (từ commit đổi
+> config sang blur-dominant). Mốc của chế độ nhiễu cũ là PSNR 21.99 / `L_img` 0.066 —
+> **không so sánh chéo hai chế độ được**. Đổi mức nhiễu thì phải chạy lại
+> `scripts/baseline_metrics.py`.
 
 ---
 
@@ -391,19 +396,27 @@ python -m qwt_jepa.scripts.baseline_metrics --split valid --n 128
 Kết quả (`n = 128` mẫu lấy thưa đều trên 5 118 mẫu valid, seed corruption `epoch = 0`):
 
 ```
-root     : /home/buidinhkhoi/Datasets/tartanair-v2
-manifest : /home/buidinhkhoi/Datasets/tartanair-v2-jepa/valid/manifest.csv
-số mẫu   : 5118
-
 chỉ số                                 mean      p10      p90
-psnr_noisy                           20.907   16.207   24.687     ← PSNR của ảnh nhiễu đầu vào
+psnr_noisy                           24.471   19.715   30.152     ← PSNR của ảnh NHOÈ đầu vào
 psnr_mean                            14.033   10.033   17.195     ← đoán màu trung bình
-limg_noisy                            0.076    0.045    0.127     ← L_img của ảnh nhiễu đầu vào
+limg_noisy                            0.042    0.018    0.072     ← L_img của ảnh nhoè đầu vào
 limg_mean                             0.193    0.094    0.282     ← L_img khi đoán màu trung bình
-rmse_acc                              0.117    0.062    0.182     ← nhiễu acc đầu vào
-rmse_gyro                             0.121    0.062    0.201     ← nhiễu gyro đầu vào
-limu_noisy                            0.177    0.098    0.276     ← L_imu của IMU nhiễu đầu vào
+rmse_acc                              0.115    0.055    0.175     ← nhiễu acc đầu vào
+rmse_gyro                             0.117    0.060    0.188     ← nhiễu gyro đầu vào
+limu_noisy                            0.171    0.088    0.259     ← L_imu của IMU nhiễu đầu vào
 ```
+
+Và **độ nét** — chỉ số mà PSNR không nói lên được:
+
+```
+ảnh SẠCH             0.0530
+ảnh NHOÈ đầu vào     0.0400     ← mờ hơn sạch 25%
+```
+
+Mục tiêu "model nét hơn đầu vào" giờ **có nghĩa**. Với config nhiễu cũ, đầu vào có độ
+nét 0.0678 > ảnh sạch 0.0587 (nét giả do nhiễu tần số cao) nên mục tiêu đó bất khả thi
+về mặt toán học — bộ lọc tuyến tính tối ưu buộc phải làm mượt, nét hơn đầu vào −27%.
+Với config nhoè: bộ lọc tối ưu cho **+5%** nét hơn đầu vào, đạt 73% độ nét ảnh sạch.
 
 Khoảng p10–p90 rộng vì `corruption.image.condition` bốc ngẫu nhiên "điều kiện chụp" cho từng
 mẫu — có mẫu gần như sạch, có mẫu rất tối và nhoè. Nên PSNR của **một** batch dao động mạnh

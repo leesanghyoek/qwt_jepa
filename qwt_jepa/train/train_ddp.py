@@ -32,31 +32,35 @@ import torch
 import torch.distributed as dist
 import yaml
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torch.utils.data.distributed import DistributedSampler
 
 _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from qwt_jepa.data.band_stats import compute_band_scales                  # noqa: E402
 from qwt_jepa.data.dataset import PairedNoisyCleanDataset, jepa_collate   # noqa: E402
 from qwt_jepa.data.normalize import ImuNormalizer                        # noqa: E402
 from qwt_jepa.models.jepa import QwtJepa                                  # noqa: E402
 from qwt_jepa.train import ema_momentum                                   # noqa: E402
 from qwt_jepa.train.losses import total_loss                             # noqa: E402
-from qwt_jepa.train.engine import make_scaler                            # noqa: E402
+from qwt_jepa.train.engine import _loss_kwargs, make_scaler              # noqa: E402
 from qwt_jepa.train.train import _improved, build_scheduler             # noqa: E402
 
 
 def ddp_setup() -> tuple[bool, int, int, int]:
     """Khoi tao process group neu chay duoi torchrun. Tra (is_dist, rank, world, local_rank)."""
     if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        # nccl chi chay duoc khi co CUDA; gloo de chay thu tren CPU.
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
         # timeout rong hon mac dinh 10' -> eval/luu checkpoint cham khong lam watchdog giet job
-        dist.init_process_group(backend="nccl", timeout=timedelta(minutes=30))
+        dist.init_process_group(backend=backend, timeout=timedelta(minutes=30))
         rank = dist.get_rank()
         world = dist.get_world_size()
         local = int(os.environ.get("LOCAL_RANK", rank))
-        torch.cuda.set_device(local)
+        if torch.cuda.is_available():
+            torch.cuda.set_device(local)
         return True, rank, world, local
     return False, 0, 1, 0
 
@@ -72,7 +76,10 @@ def main() -> None:
     ap.add_argument("--encoder-depth", type=int, default=0)
     ap.add_argument("--limit-train-batches", type=int, default=0)
     ap.add_argument("--limit-val-batches", type=int, default=0)
-    ap.add_argument("--find-unused", type=int, default=1, help="DDP find_unused_parameters (1/0)")
+    ap.add_argument("--find-unused", type=int, default=0,
+                    help="DDP find_unused_parameters (1/0). Mac dinh 0: missing_token da duoc "
+                         "dong bang khi recon_from_full nen KHONG con tham so nao thieu gradient. "
+                         "Bat len chi ton them chi phi moi buoc.")
     args = ap.parse_args()
 
     is_dist, rank, world, local = ddp_setup()
@@ -115,6 +122,15 @@ def main() -> None:
     train_ds = PairedNoisyCleanDataset(man["train"], root, cfg, "train", normalizer)
     val_ds = PairedNoisyCleanDataset(man["valid"], root, cfg, "valid", normalizer)
 
+    # Giong het train.py: manifest xep theo trajectory nen doc tuan tu + limit_val_batches
+    # chi cham phan DAU tap valid (vai env khong bao gio duoc danh gia). Hoan vi CO DINH
+    # (cung seed tren moi rank -> moi rank thay cung mot thu tu truoc khi chia shard).
+    perm = torch.randperm(
+        len(val_ds),
+        generator=torch.Generator().manual_seed(int(cfg["train"].get("val_perm_seed", 0))),
+    ).tolist()
+    val_ds = Subset(val_ds, perm)
+
     train_sampler = (
         DistributedSampler(train_ds, num_replicas=world, rank=rank, shuffle=True, drop_last=True)
         if is_dist else None
@@ -140,6 +156,29 @@ def main() -> None:
     log(f"QwtJepa: {n_par / 1e6:.2f}M params train | N tokens {core.layout.n_tokens} | "
         f"world {world} | batch/gpu {bs} | batch hieu dung {bs * world}")
 
+    # Bien do he so QWT chenh ~100 lan giua cac dai -> phai chuan hoa, neu khong encoder
+    # gan nhu khong nhin thay chi tiet min va anh tai tao bi mo (xem commit "chuan hoa he
+    # so QWT theo dai"). Buffer mac dinh la 1.0 = KHONG chuan hoa, nen bo buoc nay la train
+    # hong am tham. Do tren rank 0 roi broadcast: moi rank phai co cung buffer, va so lieu
+    # khong duoc phu thuoc vao shard cua rank.
+    # Phai goi TRUOC load_state_dict o phan resume - ban trong checkpoint moi la ban dung.
+    if bool(cfg["model"].get("band_norm", True)):
+        scales = None
+        if is_main:
+            scales = compute_band_scales(train_loader, core._qwt_all, core.layout, n_batches=8)
+        if is_dist:
+            box = [scales]
+            # device= la bat buoc voi nccl (PyTorch moi canh bao neu thieu)
+            dist.broadcast_object_list(box, src=0, device=device)
+            scales = box[0]
+        core.set_band_scales(scales)
+        lo = min(scales, key=scales.get)
+        hi = max(scales, key=scales.get)
+        log(f"band_norm: ON  | dai nho nhat {lo} {scales[lo]:.4f} | "
+            f"lon nhat {hi} {scales[hi]:.4f} | ti le {scales[hi]/scales[lo]:.0f}x")
+    else:
+        log("band_norm: OFF")
+
     ocfg = cfg["train"]["optimizer"]
     optimizer = torch.optim.AdamW(
         (p for p in core.parameters() if p.requires_grad),
@@ -149,6 +188,9 @@ def main() -> None:
     tcfg = cfg["train"]
     lim_train = args.limit_train_batches or int(tcfg.get("limit_train_batches", 0) or 0)
     lim_val = args.limit_val_batches or int(tcfg.get("limit_val_batches", 0) or 0)
+    # val da duoc chia deu cho cac rank, nen lim_val dem theo MOI rank. Chia cho world
+    # de tong so mau eval bang train.py -> con so PSNR so sanh truc tiep duoc.
+    lim_val_rank = math.ceil(lim_val / world) if lim_val else 0
 
     es = tcfg.get("early_stop") or {}
     es_metric = str(es.get("metric", "L_jepa"))
@@ -187,7 +229,7 @@ def main() -> None:
     )
     log(f"train {len(train_ds)} sample | {steps_per_epoch} batch/epoch | device {device}")
 
-    lam = cfg["train"]["loss"]
+    lam = _loss_kwargs(cfg)   # gom ca lambda_var / var_gamma / lambda_band nhu engine.py
     ema_cfg = cfg["train"]["ema"]
     grad_clip = float(cfg["train"].get("grad_clip", 0) or 0)
     log_every = int(cfg["train"].get("log_every", 50))
@@ -210,37 +252,47 @@ def main() -> None:
     def evaluate_dist() -> dict:
         """Moi rank eval phan val cua minh -> all_reduce tong -> chia. MOI rank deu goi."""
         core.eval()
-        # [sum L_jepa*b, sum mse*b, sum rmse_acc*b, sum rmse_gyro*b, n]
-        acc = torch.zeros(5, dtype=torch.float64, device=device)
+        # Mask ngau nhien moi epoch se lam PSNR nhieu -> early_stop/best.pt quyet dinh tren
+        # nhieu. Tao lai generator moi lan goi => cung mot chuoi mask giua cac epoch.
+        gen = torch.Generator().manual_seed(int(cfg["train"].get("eval_mask_seed", 1234)))
+        # Gop giong het engine.evaluate() de con so so sanh truc tiep duoc voi train.py:
+        # PSNR la TRUNG BINH dB THEO BATCH (khong phai dB cua MSE gop) - moc PSNR trong
+        # LOG_TRAIN_GIAI_THICH.md deu do bang dinh nghia nay.
+        # [sum L_jepa*b, L_jepa_pos*b, zctx_std*b, psnr*b, rmse_acc*b, rmse_gyro*b, n]
+        acc = torch.zeros(7, dtype=torch.float64, device=device)
         for bi, batch in enumerate(val_loader):
-            if lim_val and bi >= lim_val:
+            if lim_val_rank and bi >= lim_val_rank:
                 break
             batch = to_dev(batch)
             with autocast():
-                out = core(batch)
-            _, logs = total_loss(out, batch, lam["lambda_img"], lam["lambda_imu"])
+                out = core(batch, generator=gen)
+            _, logs = total_loss(out, batch, **lam)
             b = batch["img_clean"].shape[0]
-            mse = torch.mean((out["img_rec"].float() - batch["img_clean"].float()) ** 2)
+            mse = torch.mean((out["img_rec"].float() - batch["img_clean"].float()) ** 2).item()
+            psnr = -10.0 * math.log10(max(mse, 1e-10))
             rmse_acc = torch.sqrt(torch.mean(
                 (out["imu_rec"][..., 0:3].float() - batch["imu_clean"][..., 0:3].float()) ** 2
-            ))
+            )).item()
             rmse_gyro = torch.sqrt(torch.mean(
                 (out["imu_rec"][..., 3:6].float() - batch["imu_clean"][..., 3:6].float()) ** 2
-            ))
+            )).item()
             acc[0] += logs["L_jepa"] * b
-            acc[1] += mse.double() * b
-            acc[2] += rmse_acc.double() * b
-            acc[3] += rmse_gyro.double() * b
-            acc[4] += b
+            acc[1] += logs["L_jepa_pos"] * b
+            acc[2] += logs["zctx_std"] * b
+            acc[3] += psnr * b
+            acc[4] += rmse_acc * b
+            acc[5] += rmse_gyro * b
+            acc[6] += b
         if is_dist:
             dist.all_reduce(acc, op=dist.ReduceOp.SUM)
-        n = max(acc[4].item(), 1.0)
-        mse_mean = acc[1].item() / n
+        n = max(acc[6].item(), 1.0)
         return {
             "L_jepa": acc[0].item() / n,
-            "psnr": -10.0 * math.log10(max(mse_mean, 1e-10)),
-            "rmse_acc": acc[2].item() / n,
-            "rmse_gyro": acc[3].item() / n,
+            "L_jepa_pos": acc[1].item() / n,
+            "zctx_std": acc[2].item() / n,
+            "psnr": acc[3].item() / n,
+            "rmse_acc": acc[4].item() / n,
+            "rmse_gyro": acc[5].item() / n,
         }
 
     for epoch in range(start_epoch, cfg["train"]["epochs"]):
@@ -260,7 +312,7 @@ def main() -> None:
             batch = to_dev(batch)
             with autocast():
                 out = model(batch)
-                loss, logs = total_loss(out, batch, lam["lambda_img"], lam["lambda_imu"])
+                loss, logs = total_loss(out, batch, **lam)
 
             optimizer.zero_grad(set_to_none=True)
             if scaler.is_enabled():
@@ -288,8 +340,10 @@ def main() -> None:
                 print(
                     f"e{epoch} {i:4d}/{steps_per_epoch} step {step:6d} | "
                     f"L {logs['L_total']:.4f} (jepa {logs['L_jepa']:.4f} "
-                    f"img {logs['L_img']:.4f} imu {logs['L_imu']:.4f}) | "
-                    f"z_std {logs['ztgt_std']:.3f} | lr {lr:.2e} m {m:.4f} | {ips:.1f} im/s",
+                    f"img {logs['L_img']:.4f} imu {logs['L_imu']:.4f} "
+                    f"band {logs['L_band']:.4f} var {logs['L_var']:.4f}) | "
+                    f"z_std {logs['ztgt_std']:.3f} ctx {logs['zctx_std']:.3f} | "
+                    f"lr {lr:.2e} m {m:.4f} | {ips:.1f} im/s",
                     flush=True,
                 )
 
@@ -306,7 +360,9 @@ def main() -> None:
 
         if is_main:
             print(
-                f"[eval e{epoch}] L_jepa {metrics['L_jepa']:.4f} | PSNR {metrics['psnr']:.2f} dB | "
+                f"[eval e{epoch}] L_jepa {metrics['L_jepa']:.4f}"
+                f"/{metrics['L_jepa_pos']:.4f}pos | z_std {metrics['zctx_std']:.3f} | "
+                f"PSNR {metrics['psnr']:.2f} dB | "
                 f"RMSE acc {metrics['rmse_acc']:.4f} gyro {metrics['rmse_gyro']:.4f}",
                 flush=True,
             )

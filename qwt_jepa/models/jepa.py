@@ -58,6 +58,12 @@ class QwtJepa(nn.Module):
         self.levels_imu = int(cfg["data"]["imu"]["qwt_levels"])
         self.recon_from_full = bool(cfg["model"].get("recon_from_full", True))
         self.recon_skip = bool(cfg["model"].get("recon_skip", True)) and self.recon_from_full
+        if self.recon_from_full:
+            # _assemble_full() khong duoc goi nua nen missing_token khong nhan gradient.
+            # De nguyen requires_grad=True thi DDP bao loi "Expected to have finished
+            # reduction..." va phai bat find_unused_parameters (ton chi phi moi buoc).
+            # Dong bang la cach sua goc.
+            self.missing_token.requires_grad_(False)
 
     # ------------------------------------------------------------------ #
     def _heads(self, emb, q_img, q_imu, img_bands=None, imu_bands=None):

@@ -229,7 +229,8 @@ print("  norm_stats.yaml:", pathlib.Path("/kaggle/working/norm_stats.yaml").exis
 
 ================================================================================
  NOTEBOOK B : "qwt-train"
-   Settings: Accelerator = GPU P100 (hoac T4)  |  Internet = ON (de git clone)
+   Settings: Accelerator = GPU T4 x2  |  Internet = ON (de git clone)
+             (P100 la 1 GPU - chon T4 x2 de dung ca hai; xem muc E)
    Add data: dataset  <username>/tartanair-v2-256
              (tu phien 2 tro di) them dataset run truoc -> xem muc C
 ================================================================================
@@ -315,11 +316,11 @@ print("  norm_stats :", base["data"]["norm_stats"])
 # best.pt, de chung cho voi lan train that se de nham checkpoint 1-epoch cua smoke
 # la checkpoint that (nhat la khi --resume o phien sau).
 # --limit-val-batches 5 cho eval chi 5 batch thay vi 100 -> smoke xong trong ~10s.
-!python qwt_jepa/train/train.py \
+!torchrun --standalone --nproc_per_node=2 qwt_jepa/train/train_ddp.py \
     --config qwt_jepa/configs/kaggle.yaml \
     --out /kaggle/working/runs/_smoke \
-    --batch-size 32 --epochs 1 \
-    --limit-train-batches 10 --limit-val-batches 5 --num-workers 4
+    --batch-size 16 --epochs 1 \
+    --limit-train-batches 10 --limit-val-batches 5 --num-workers 2
 
 # DOC KY 5 DONG SAU TRONG OUTPUT, sai bat ky dong nao thi DUNG, dung chay B4:
 #   norm stats: /kaggle/input/...      <- KHONG duoc la "[canh bao] ... dung identity"
@@ -358,10 +359,10 @@ print("  norm_stats :", base["data"]["norm_stats"])
 import subprocess, collections, time
 from IPython.display import clear_output
 
-CMD = ["python", "qwt_jepa/train/train.py",
+CMD = ["torchrun", "--standalone", "--nproc_per_node=2", "qwt_jepa/train/train_ddp.py",
        "--config", "qwt_jepa/configs/kaggle.yaml",
        "--out", "/kaggle/working/runs/base",
-       "--batch-size", "32", "--num-workers", "4"]
+       "--batch-size", "16", "--num-workers", "2"]   # batch MOI GPU -> hieu dung 32
 TAIL      = 20                          # so dong log gan nhat giu tren man hinh
 REFRESH_S = 0.7                         # toi thieu bao lau moi ve lai (tranh spam DOM)
 LOGFILE   = "/kaggle/working/train.log"
@@ -413,13 +414,18 @@ print("ma thoat:", proc.returncode if proc else "?")
 
 # Neu lo de sot tien trinh mo coi (chay lai cell ma van thay cham / OOM):
 #   !nvidia-smi
-#   !pkill -f "qwt_jepa/train/train.py" ; sleep 3 ; nvidia-smi
+#   !pkill -f "qwt_jepa/train/train_ddp.py" ; pkill -f torchrun ; sleep 3 ; nvidia-smi
 
 # Muon xem lai toan bo log sau do:
 #   !tail -100 /kaggle/working/train.log
 #   !grep "^\[eval" /kaggle/working/train.log       # chi cac dong eval
 #
-# (Ban cu, khong wrapper - dung neu muon xem het output:
+# (Khong wrapper - dung neu muon xem het output:
+#  !torchrun --standalone --nproc_per_node=2 qwt_jepa/train/train_ddp.py \
+#      --config qwt_jepa/configs/kaggle.yaml \
+#      --out /kaggle/working/runs/base --batch-size 16 --num-workers 2 )
+#
+# (1 GPU - van chay duoc, dung khi Kaggle chi cap P100:
 #  !python qwt_jepa/train/train.py --config qwt_jepa/configs/kaggle.yaml \
 #      --out /kaggle/working/runs/base --batch-size 32 --num-workers 4 )
 
@@ -453,16 +459,18 @@ else:
    No se mount o:  /kaggle/input/<ten>/runs/base/last.pt
 
 2. Sua Cell B4 thanh:
-!python qwt_jepa/train/train.py \
+!torchrun --standalone --nproc_per_node=2 qwt_jepa/train/train_ddp.py \
     --config qwt_jepa/configs/kaggle.yaml \
     --out /kaggle/working/runs/base \
-    --batch-size 32 --num-workers 4 \
+    --batch-size 16 --num-workers 2 \
     --resume /kaggle/input/<ten-output-phien-truoc>/runs/base/last.pt
 
    train.py se doc model/optimizer/scheduler + best + es_bad (bo dem early-stop),
    dat start_epoch = epoch_da_luu + 1, chay tiep den khi early_stop kich hoat hoac
    het epochs. LUU Y: giu nguyen --batch-size, train.epochs, train.limit_train_batches
-   moi phien (total_steps = epochs * limit_train_batches -> doi se lech lich LR/EMA).
+   moi phien, VA giu nguyen --nproc_per_node (total_steps = epochs * limit_train_batches;
+   doi so GPU thi batch hieu dung doi -> lech lich LR/EMA. train_ddp.py luu "world_size"
+   trong checkpoint va se in canh bao neu lech, nhung KHONG tu sua).
    Neu phien truoc da in "dung som" thi khong can chay tiep.
 
 3. Save Version. Lap lai cho den khi log in "xong."
@@ -551,6 +559,47 @@ thay doi nay deu tren mot lat cat thien lech, khong so sanh truc tiep duoc voi s
 
 
 ================================================================================
+ C4. CHAY 2 GPU (Kaggle T4 x2)
+================================================================================
+Settings notebook -> Accelerator -> "GPU T4 x2". Neu chi thay 1 GPU chay 98% con GPU
+kia 0% thi do dang chay train.py (1 tien trinh, 1 GPU). Phai dung train_ddp.py.
+
+Thay CMD trong wrapper Cell B4 bang:
+
+CMD = ["torchrun", "--standalone", "--nproc_per_node=2",
+       "qwt_jepa/train/train_ddp.py",
+       "--config", "qwt_jepa/configs/kaggle.yaml",
+       "--out", "/kaggle/working/runs/base",
+       "--batch-size", "16", "--num-workers", "2"]
+
+HAI CHO DE SAI:
+
+1. --batch-size la batch MOI GPU. Dat 16 x 2 GPU = batch hieu dung 32, DUNG BANG cac
+   run 1 GPU truoc day -> so sanh truc tiep duoc, khong phai chinh lr.
+   Neu dat 32/GPU thi batch hieu dung la 64 -> phai nhan doi lr (1.5e-4 -> 3e-4).
+
+2. --num-workers la MOI tien trinh. Kaggle co 4 vCPU, 2 tien trinh x 2 worker = 4.
+   Dat 4/tien trinh la 8 worker tren 4 vCPU -> tranh CPU, CHAM HON.
+
+KY VONG THUC TE - dung mong gap doi:
+Uoc tu so lieu da do (1 GPU: 60 im/s truoc khi them luot thu 2, 48 im/s sau do):
+    CPU nap du lieu toi da  ~60 im/s
+    GPU (1 the)             ~48 im/s
+    GPU (2 the)             ~96 im/s  -> nhung bi CPU chan o 60
+=> thuc te ~48 -> ~60 im/s, tang ~25%. Nut co chai chuyen tu GPU sang DATALOADER.
+Muon nhanh hon nua phai lam dataloader nhanh hon (anh nho hon, hoac cache san), chu
+khong phai them GPU.
+
+KIEM TRA dang chay 2 GPU that:
+    !nvidia-smi        # phai thay CA HAI the co tien trinh python va %util > 0
+Dong log dau tien cung phai in: "world 2 | batch/gpu 16 | batch hieu dung 32"
+
+RESUME: phai giu NGUYEN so GPU + batch-size + epochs. total_steps = epochs *
+limit_train_batches nen doi so GPU se lam lech lich LR/EMA. Checkpoint co luu
+"world_size" de canh bao.
+
+
+================================================================================
  D. GHI CHU
 ================================================================================
 - Quota GPU Kaggle: ~30h/tuan, moi phien toi da 12h. Notebook A khong dung GPU.
@@ -581,5 +630,46 @@ thay doi nay deu tren mot lat cat thien lech, khong so sanh truc tiep duoc voi s
       -> patience: 0 de TAT early stop.
     best.pt luu theo dung metric early_stop (khong con co dinh L_jepa).
 ================================================================================
+
+
+================================================================================
+ E. CHAY 2 GPU (Kaggle T4 x2)
+================================================================================
+Settings -> Accelerator -> "GPU T4 x2". Chon P100 la chi co 1 GPU.
+
+CHAY BANG torchrun, KHONG phai `!python`:
+    !torchrun --standalone --nproc_per_node=2 qwt_jepa/train/train_ddp.py ...
+
+`!python qwt_jepa/train/train_ddp.py ...` VAN CHAY nhung chi dung 1 GPU va KHONG bao
+loi: ddp_setup() nhan dien che do phan tan qua bien moi truong RANK/WORLD_SIZE, ma chi
+torchrun dat hai bien do. Kiem tra o dong log dau tien:
+    QwtJepa: 25.60M params train | N tokens 512 | world 2 | batch/gpu 16 | batch hieu dung 32
+                                                   ^^^^^^^ phai la 2, khong phai 1
+`!nvidia-smi` luc dang train phai thay HAI tien trinh python, moi cai ~2 GB.
+
+qwt_jepa/train/train.py KHONG BAO GIO dung duoc 2 GPU - no chi co
+`torch.device("cuda")` (= cuda:0), khong co DDP. Muon 2 GPU la phai doi sang train_ddp.py.
+
+--batch-size LA BATCH MOI GPU. Batch hieu dung = batch_size * so_gpu.
+    1 GPU: --batch-size 32              -> hieu dung 32
+    2 GPU: --batch-size 16              -> hieu dung 32  (giu nguyen lr)
+    2 GPU: --batch-size 32              -> hieu dung 64  (phai x2 lr theo ti le tuyen tinh)
+Playbook nay dung 16 de batch hieu dung khong doi -> khong phai chinh lr, va con so
+so sanh truc tiep duoc voi cac lan chay 1 GPU truoc do.
+
+limit_train_batches dem theo MOI rank: 500 batch x 16 x 2 GPU = 16000 sample/epoch,
+bang het voi 1 GPU (500 x 32). total_steps khong doi -> lich LR/EMA khong doi.
+limit_val_batches thi train_ddp.py TU CHIA cho so GPU (lim_val_rank), nen tong so mau
+eval bang voi 1 GPU va PSNR so sanh truc tiep duoc.
+
+num-workers 2 chu khong phai 4: notebook chi co 4 vCPU va gio co 2 tien trinh.
+
+KHONG resume checkpoint 1 GPU bang lenh 2 GPU (va nguoc lai): batch hieu dung doi ->
+lich LR/EMA lech. Doi so GPU thi train lai tu dau.
+
+KY VONG THUC TE: dataloader la nut co chai tren Kaggle (4 vCPU, ~130 sample/s), nen
+2 GPU thuong KHONG nhanh gap doi. Do im/s trong log sau vai chuc batch:
+    ~150 im/s (nhu 1 GPU)  -> CPU nghen, 2 GPU khong giup gi, quay ve train.py cho don gian
+    ~250-300 im/s          -> co an, giu 2 GPU
 
 claude --resume ba0e11ba-8f34-42ca-a011-24160eb6152a
