@@ -108,6 +108,12 @@ model:
   d_model: 384
   encoder:   {depth: 12, heads: 6}
   predictor: {d_pred: 192, depth: 4, heads: 6}
+  recon_depth: 0                  # So lop transformer cua DECODER nhanh tai tao.
+                                  #   0 = tat (duong cu: encoder 12 lop -> 1 lop Linear,
+                                  #   rat mat can xung; MAE dung decoder 8 lop).
+                                  #   Huong B (uu tien anh/IMU dep): thu 4.
+  recon_width: 192                # be rong decoder (chi dung khi recon_depth > 0)
+  recon_heads: 6
   recon_gate: true                # Head xuat HE SO NHAN cho he so nhieu (w*(1+gate)+delta)
                                   #   thay vi chi cong. Khu nhieu wavelet la phep CO he so -
                                   #   mot phep NHAN - ma mot lop Linear khong bieu dien noi.
@@ -177,6 +183,11 @@ train:
                               #   epoch nghia la van chua du nhanh, tang tiep.
   ema: {start: 0.996, end: 1.0}
   loss:
+    lambda_jepa: 1.0          # Ha xuong (vd 0.2) hoac 0 neu chi quan tam ANH/IMU DEP.
+                              #   Nhanh JEPA an ~40% thoi gian moi buoc (luot che +
+                              #   predictor + target encoder). Dat 0 thi no van chay
+                              #   nhung khong dong gop gradient - muon nhanh hon nua
+                              #   phai bo han, chua lam.
     lambda_img: 1.0
     lambda_imu: 1.0
     lambda_band: 0.0          # TAT theo mac dinh. Loss tren he so QWT da chuan hoa, moi

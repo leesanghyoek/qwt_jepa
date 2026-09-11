@@ -42,6 +42,7 @@ def make_scaler(cfg: dict, device: torch.device):
 def _loss_kwargs(cfg: dict) -> dict:
     lam = cfg["train"]["loss"]
     return dict(
+        lambda_jepa=float(lam.get("lambda_jepa", 1.0)),
         lambda_img=float(lam.get("lambda_img", 1.0)),
         lambda_imu=float(lam.get("lambda_imu", 1.0)),
         lambda_var=float(lam.get("lambda_var", 0.0)),

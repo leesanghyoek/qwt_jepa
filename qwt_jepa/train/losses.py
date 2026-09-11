@@ -108,6 +108,7 @@ def imu_recon_loss(rec: torch.Tensor, clean: torch.Tensor) -> torch.Tensor:
 def total_loss(
     out: dict,
     batch: dict,
+    lambda_jepa: float = 1.0,
     lambda_img: float = 1.0,
     lambda_imu: float = 1.0,
     lambda_var: float = 0.0,
@@ -117,7 +118,7 @@ def total_loss(
     l_jepa = jepa_loss(out["z_pred"], out["z_tgt"])
     l_img = charbonnier(out["img_rec"], batch["img_clean"])
     l_imu = imu_recon_loss(out["imu_rec"], batch["imu_clean"])
-    total = l_jepa + lambda_img * l_img + lambda_imu * l_imu
+    total = lambda_jepa * l_jepa + lambda_img * l_img + lambda_imu * l_imu
 
     l_band = torch.zeros((), device=l_jepa.device)
     if lambda_band > 0 and "img_bands" in out:

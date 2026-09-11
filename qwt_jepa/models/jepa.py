@@ -46,6 +46,19 @@ class QwtJepa(nn.Module):
         for p in self.target_encoder.parameters():
             p.requires_grad_(False)
 
+        # Decoder cho nhanh TAI TAO. Hien tai duong tai tao la: encoder 12 lop
+        # attention toan cuc -> MOT lop Linear tren tung token. Rat mat can xung.
+        # De so sanh: MAE (kien truc chuyen tai tao pixel) dung decoder 8 lop
+        # transformer. recon_depth 0 = tat (nhu cu).
+        rd = int(cfg["model"].get("recon_depth", 0))
+        if rd > 0:
+            dr = int(cfg["model"].get("recon_width", 192))
+            self.recon_in = nn.Linear(d_model, dr) if dr != d_model else nn.Identity()
+            self.recon_dec = Encoder(dr, rd, int(cfg["model"].get("recon_heads", 6)))
+            self.recon_out = nn.Linear(dr, d_model)
+        else:
+            self.recon_dec = None
+
         self.predictor = Predictor(cfg, self.layout.n_tokens)
         self.image_head = ImageHead(cfg, self.layout)
         self.imu_head = ImuHead(cfg, self.layout)
@@ -66,6 +79,13 @@ class QwtJepa(nn.Module):
             self.missing_token.requires_grad_(False)
 
     # ------------------------------------------------------------------ #
+    def _encode_full(self, tok: torch.Tensor) -> torch.Tensor:
+        """Duong TAI TAO: toan bo token -> encoder -> (decoder neu bat)."""
+        emb = self.context_encoder(tok)
+        if self.recon_dec is not None:
+            emb = self.recon_out(self.recon_dec(self.recon_in(emb)))
+        return emb
+
     def _heads(self, emb, q_img, q_imu, img_bands=None, imu_bands=None):
         """Chay hai recon head. Thap QWT NHIEU duoc noi vao lam skip connection."""
         si, su = (q_img, q_imu) if self.recon_skip else (None, None)
@@ -83,7 +103,7 @@ class QwtJepa(nn.Module):
         """
         q_img, q_imu = self._qwt_all(img_noisy, imu_noisy)
         tok = self.tokenizer(q_img, q_imu)
-        return self._heads(self.context_encoder(tok), q_img, q_imu)
+        return self._heads(self._encode_full(tok), q_img, q_imu)
 
     # ------------------------------------------------------------------ #
     @torch.no_grad()
@@ -188,7 +208,7 @@ class QwtJepa(nn.Module):
         img_bands: dict = {}
         imu_bands: dict = {}
         if self.recon_from_full:
-            emb_rec = self.context_encoder(tok_c)                    # [B, 512, d]
+            emb_rec = self._encode_full(tok_c)                       # [B, 512, d]
         else:
             emb_rec = self._assemble_full(z_ctx, z_pred, mask, b)    # duong cu
         img_rec, imu_rec = self._heads(emb_rec, q_img_n, q_imu_n, img_bands, imu_bands)

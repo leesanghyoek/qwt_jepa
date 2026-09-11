@@ -88,7 +88,8 @@ def build_optimizer(model, cfg: dict):
     for n, p in model.named_parameters():
         if not p.requires_grad:
             continue
-        (head if n.startswith(("image_head.", "imu_head.")) else rest).append(p)
+        is_recon = n.startswith(("image_head.", "imu_head.", "recon_in.", "recon_dec.", "recon_out."))
+        (head if is_recon else rest).append(p)
     groups = [{"params": rest, "lr": lr}]
     if head:
         groups.append({"params": head, "lr": lr * mult})
