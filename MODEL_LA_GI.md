@@ -287,3 +287,214 @@ Không phải kiến trúc, mà là **bộ công cụ đo**:
 Mỗi công cụ ở trên ra đời **sau khi** một lỗi đã âm thầm chạy hàng giờ mà không ai biết.
 Ba lần liên tiếp, lỗi chỉ lộ ra khi có chỉ số đo đúng thứ cần đo. Bài học:
 **không thêm một cơ chế nào mà không thêm cách nhìn thấy nó đang làm gì.**
+
+---
+
+# Phụ lục: Huấn luyện hai giai đoạn, giải thích từ đầu
+
+Phần này viết cho người chưa quen lý thuyết học máy. Nếu bạn đã nắm rõ, bỏ qua được.
+
+## A. "Huấn luyện" thực chất là gì
+
+Model là **một đống số** — ở đây là 25.60 triệu số thực, gọi là *tham số*. Lúc mới tạo,
+chúng là số ngẫu nhiên, và model làm gì cũng sai.
+
+Huấn luyện là vòng lặp bốn bước:
+
+```
+1. Cho dữ liệu chạy qua đống số đó       →  ra kết quả
+2. Tính LOSS: một con số đo "sai bao nhiêu"
+3. Tính GRADIENT: mỗi trong 25.6 triệu số nên tăng hay giảm để loss nhỏ đi
+4. Chỉnh từng số một chút theo hướng đó   →  quay lại bước 1
+```
+
+Một "bước" (step) là một lần chạy vòng này. Một "epoch" ở đây là 300 bước.
+
+**Điều quan trọng nhất phải nhớ:** model **chỉ học được cái mà loss đo**. Loss không
+đo độ nét thì model không học làm nét, dù bạn muốn đến đâu. Toàn bộ tài liệu này xoay
+quanh hệ quả của câu đó.
+
+## B. JEPA khác gì model quen thuộc
+
+Model khử nhiễu thông thường (autoencoder) làm thế này:
+
+```
+ảnh nhiễu  →  [model]  →  ảnh sạch dự đoán
+                              ↓
+                    loss = so từng pixel với ảnh sạch thật
+```
+
+JEPA làm khác hẳn:
+
+```
+ảnh nhiễu  →  [model]  →  MỘT VECTOR 384 số
+                              ↓
+                    loss = so vector đó với vector "đúng"
+```
+
+Đầu ra không phải ảnh, mà là **một dãy số tóm tắt nội dung**. Dãy số đó gọi là
+*biểu diễn* (representation) hay *latent*.
+
+**Vì sao lại làm vậy?** Vì trong ảnh có những thứ **không thể đoán được**: hạt nhiễu
+cụ thể rơi ở đâu, vân gỗ ngẫu nhiên trông ra sao. Ép model đoán từng pixel là ép nó
+tiêu năng lực vào việc bất khả thi. JEPA nói: đừng đoán pixel, hãy đoán **ý nghĩa**.
+
+Cách JEPA tự tạo bài tập cho mình mà không cần ai gán nhãn:
+
+```
+1. Cắt ảnh + IMU thành 512 mảnh nhỏ ("token")
+2. CHE đi ~70%, chỉ cho model xem ~152 token
+3. Bắt model đoán: "phần bị che có latent trông như thế nào?"
+4. So với latent thật (tính từ dữ liệu SẠCH đầy đủ)
+```
+
+Muốn đoán đúng thì buộc phải *hiểu* cảnh đang nhìn. Đó là toàn bộ ý tưởng.
+
+## C. Giai đoạn 1 — chi tiết từng bước
+
+```
+ĐẦU VÀO (mỗi mẫu):
+    ảnh nhiễu  [3, 256, 256]      ảnh sạch  [3, 256, 256]
+    IMU nhiễu  [128, 6]           IMU sạch  [128, 6]
+        └── model được xem ──┘        └── chỉ dùng làm ĐÁP ÁN ──┘
+
+ ┌─ NHÁNH CONTEXT (nhánh chính, đang học) ────────────────────────┐
+ │  ảnh+IMU NHIỄU → QWT → 512 token, mỗi token 384 số             │
+ │  CHE: chỉ giữ ~152 token                                        │
+ │  → context_encoder (12 lớp) → z_ctx  [152, 384]                 │
+ │  → predictor → z_pred  [~208, 384]   ← ĐOÁN latent phần bị che  │
+ └─────────────────────────────────────────────────────────────────┘
+
+ ┌─ NHÁNH TARGET (làm đáp án, KHÔNG học) ─────────────────────────┐
+ │  ảnh+IMU SẠCH → QWT → 512 token (đủ, không che)                 │
+ │  → target_encoder → lấy ra ~208 token đúng vị trí bị che         │
+ │  → z_tgt  [~208, 384]                                           │
+ └─────────────────────────────────────────────────────────────────┘
+
+LOSS:  L_jepa = |z_pred − z_tgt|     ← so HAI DÃY SỐ, không phải hai ảnh
+```
+
+**Đầu ra của giai đoạn 1 KHÔNG phải ảnh.** Nó là hai dãy số được đem so với nhau.
+
+Vài chi tiết dễ thắc mắc:
+
+- **Vì sao nhánh target dùng dữ liệu sạch?** Để đáp án là "cảnh thật trông thế nào",
+  không phải "cảnh nhiễu trông thế nào". Model học đi từ nhiễu về sạch ngay trong
+  không gian latent.
+- **`target_encoder` là gì?** Một bản sao của `context_encoder`, **không** học bằng
+  gradient. Mỗi bước nó bị kéo nhích về phía bản chính: `target = 0.996×target +
+  0.004×context`. Gọi là EMA. Nếu dùng chung một encoder cho cả hai nhánh thì model
+  gian lận được — nó chỉ cần làm cả hai bên cùng ra một hằng số là loss về 0 mà không
+  học gì. Đó là *collapse*, và nó **đã thực sự xảy ra** trong dự án này.
+- **Học những gì:** `tokenizer` + `context_encoder` + `predictor` = **23.82M** tham số.
+  Hai recon head có `lambda_img = lambda_imu = 0` nên **không nhận gradient**.
+
+**Kết thúc GĐ1 bạn có:** một `context_encoder` biết biến tín hiệu nhiễu thành biểu diễn
+có nghĩa. Nó **chưa biết vẽ lại ảnh** — chưa ai dạy nó việc đó.
+
+## D. Giai đoạn 2 — chi tiết từng bước
+
+```
+ĐẦU VÀO:  ảnh nhiễu [3,256,256] + IMU nhiễu [128,6]     ← CHỈ có vậy
+                            │
+                    QWT → 512 token
+                            │
+              KHÔNG che gì cả — dùng đủ 512 token
+                            │
+              context_encoder  ❄️ ĐÓNG BĂNG ❄️
+                            │
+                   biểu diễn [512, 384]
+                     ┌──────┴──────┐
+                image_head      imu_head      ← chỉ HAI CÁI NÀY học
+                     │              │
+ĐẦU RA:      ảnh [3,256,256]   IMU [128,6]    ← tín hiệu THẬT
+
+LOSS:  L_img = |ảnh ra − ảnh sạch|      L_imu = |IMU ra − IMU sạch|
+```
+
+**Khác GĐ1 ở ba chỗ:**
+
+| | GĐ1 | GĐ2 |
+|---|---|---|
+| Che token | có (~152/512) | **không** (đủ 512) |
+| Đầu ra | vector latent | **ảnh + IMU** |
+| Học | 23.82M | **1.77M** (7% model) |
+
+**Vì sao GĐ2 không che?** Vì che là công cụ để *tạo bài tập* cho GĐ1. GĐ2 không giải
+đố nữa — nó làm việc thật: nhận đủ tín hiệu vào, trả tín hiệu sạch ra. Đúng như lúc
+triển khai.
+
+## E. "Đóng băng" nghĩa là gì cụ thể
+
+Mỗi tham số có một cờ `requires_grad`. Đóng băng là bật cờ đó thành `False` cho
+53 tensor thuộc `tokenizer` + `context_encoder` + `predictor`.
+
+Hệ quả cụ thể:
+
+- Bước 3 (tính gradient) **bỏ qua** chúng
+- Bước 4 (chỉnh số) **không đụng** vào chúng
+- Chúng giữ nguyên giá trị đã học ở GĐ1, y hệt, suốt GĐ2
+
+Kiểm chứng được trong log — cột `z_std`:
+
+```
+[eval e0] z_std 0.648 | PSNR 23.74 | net 0.769
+[eval e1] z_std 0.648 | PSNR 23.69 | net 0.776
+[eval e2] z_std 0.648 | PSNR 23.64 | net 0.785
+     ↑ giống hệt nhau đến chữ số thứ ba — biểu diễn KHÔNG đổi
+```
+
+Cột `net` (độ nét) vẫn bò lên đều. Nghĩa là head đang học thật, trên một nền đứng yên.
+
+**Tác dụng phụ:** nhanh hơn ~2.3× vì không phải tính gradient qua 12 lớp encoder.
+
+## F. Vì sao không gộp hai giai đoạn làm một
+
+Đây là thứ đã thử và **thất bại**, có số liệu:
+
+```
+L_jepa   0.55 → 0.005     ← JEPA thắng
+L_img    0.044 → 0.126    ← tái tạo THUA (loss huấn luyện ĐI LÊN)
+ctx      dao động 0.37 ↔ 1.08    ← encoder bị giật liên tục
+```
+
+Lý do: **hai mục tiêu đòi hỏi ngược nhau.**
+
+| | JEPA muốn | Tái tạo muốn |
+|---|---|---|
+| Chi tiết vụn, hạt nhiễu | **vứt đi** — đó là mục đích của nó | **giữ từng pixel** |
+
+Một `context_encoder` không thể vừa vứt vừa giữ. Và vì `L_jepa` (0.2–0.5) lớn hơn
+`L_img` (0.04) khoảng 10 lần, nó **thắng** trong cuộc giằng co — encoder bị kéo theo
+hướng JEPA, còn head thì phải học một ánh xạ từ nền **liên tục biến dạng**. Không bám kịp.
+
+Tách hai giai đoạn giải quyết đúng chỗ đó: GĐ2 nền đứng yên, head có mục tiêu cố định.
+
+Đây không phải mẹo riêng của dự án này — **MAE, DINO, I-JEPA, SimCLR** đều dùng công
+thức "tiền huấn luyện rồi tinh chỉnh". Sai lầm là ta đã chạy song song.
+
+## G. Bảng tra khi chạy
+
+| | Giai đoạn 1 | Giai đoạn 2 |
+|---|---|---|
+| Config | `lambda_img=0, lambda_imu=0` | `lambda_jepa=0, lambda_var=0` |
+| `early_stop` | `L_jepa` (min) | `psnr` (max) |
+| Cờ thêm | — | `--init-from .../gd1/last.pt --freeze-backbone 1` |
+| `--out` | `runs/gd1` | `runs/gd2a` |
+| **Nhìn cột** | `L_jepa/pos` < 1.0, `z_std` 0.7–1.1 | `PSNR`, `net`, `gate`, `RMSE` |
+| **Bỏ qua cột** | PSNR, net (head chưa học) | `L_jepa` (đã tắt) |
+| Dừng khi | in `dung som` hoặc `xong.` | in `dung som` hoặc `xong.` |
+
+**Đừng dùng `--resume` cho GĐ2.** `--resume` là để nối lại một run bị ngắt: nó khôi
+phục cả optimizer, scheduler và đặt `start_epoch = epoch+1`. Sau một GĐ1 chạy 40 epoch,
+vòng lặp sẽ là `range(40, 40)` — **rỗng, không train gì cả**. Dùng `--init-from`: chỉ
+nạp trọng số rồi bắt đầu lại từ epoch 0.
+
+## H. Một chi phí còn tồn tại
+
+Ở GĐ1, hai recon head **vẫn chạy forward** (chỉ là loss nhân 0 nên không có gradient),
+và lượt tái tạo qua đủ 512 token cũng vẫn chạy. Nên GĐ1 **lãng phí khoảng 40% thời
+gian** cho phần không dùng đến.
+
+Không ảnh hưởng kết quả, chỉ tốn thời gian. Sửa được bằng một cờ bỏ hẳn nhánh tái tạo
+khi `lambda_img = lambda_imu = 0`, nhưng chưa làm.
