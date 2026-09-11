@@ -21,6 +21,25 @@ from .layout import TokenLayout
 from .tokenizer import patchify, unpatchify
 
 
+class _GatedHead(nn.Module):
+    """Phan dung chung cua hai recon head: he so nhan CO CHAN."""
+
+    def _gain(self, g: torch.Tensor) -> torch.Tensor:
+        """1 + gate_max * tanh(g). Bang 1.0 dung khi g = 0 -> khoi tao van la phep copy.
+
+        Vi sao phai chan: `1 + g` khong chan lam model PHAN KY. Do that (head_lr_mult 10):
+            e0 PSNR 17.50 net 1.393 | e1 10.68 net 2.368 | e2 13.62 net 1.829
+        net > 1 nghia la anh ra NET HON ca anh sach - model bia tan so cao de trong net,
+        va L_img tren TRAIN tang 0.044 -> 0.25. He so nhan khong chan la phep NHAN, nen
+        sai so nho o g bi nhan len theo bien do he so - dai LL bien do lon thi mot chut
+        lech cung thanh loi to. tanh giu he so trong [1-gate_max, 1+gate_max].
+        gate_max = 1.0 -> he so trong [0, 2]: van du cho khu nhoe (can > 1) va co he so
+        (can < 1), nhung khong the phong to vo han.
+        """
+        gm = float(getattr(self, "gate_max", 1.0))
+        return 1.0 + gm * torch.tanh(g) if gm > 0 else 1.0 + g
+
+
 def _pad_w0_img(v: torch.Tensor) -> torch.Tensor:
     """[B, 3, h, w] -> [B, 4, h, w] voi kenh w = 0."""
     w = v.new_zeros(v.shape[0], 1, v.shape[2], v.shape[3])
@@ -33,7 +52,7 @@ def _pad_w0_seq(v: torch.Tensor) -> torch.Tensor:
     return torch.cat([w, v], dim=-1)
 
 
-class ImageHead(nn.Module):
+class ImageHead(_GatedHead):
     def __init__(self, cfg: dict, layout: TokenLayout):
         super().__init__()
         d_model = int(cfg["model"]["d_model"])
@@ -75,6 +94,7 @@ class ImageHead(nn.Module):
         # Doi xung voi Tokenizer: head du doan he so DA CHUAN HOA roi nhan lai scale.
         self.register_buffer("band_scale", torch.ones(len(layout.image_entries)))
         self.gate_abs = 0.0          # chi de theo doi, khong tham gia tinh toan
+        self.gate_max = float(cfg["model"].get("recon_gate_max", 1.0))
 
     def forward(
         self,
@@ -101,7 +121,7 @@ class ImageHead(nn.Module):
                 # (dau ra = anh vao). Neu sau nhieu epoch gate VAN ~0 thi head chua
                 # roi diem xuat phat - la van de toc do hoc, khong phai hoc sai.
                 self.gate_abs = float(g.detach().abs().mean())
-                norm = raw_p * (1.0 + g) + d
+                norm = raw_p * self._gain(g) + d
             if bands_out is not None:
                 bands_out[(e.level, e.band)] = norm
             band = norm * self.band_scale[i]                      # [B, gh*gw, 3p^2]
@@ -111,7 +131,7 @@ class ImageHead(nn.Module):
         return q[:, 1:4]                                          # [B, 3, H, W]
 
 
-class ImuHead(nn.Module):
+class ImuHead(_GatedHead):
     def __init__(self, cfg: dict, layout: TokenLayout):
         super().__init__()
         d_model = int(cfg["model"]["d_model"])
@@ -127,6 +147,7 @@ class ImuHead(nn.Module):
             nn.init.zeros_(self.proj.bias)
         self.register_buffer("band_scale", torch.ones(len(layout.imu_entries)))
         self.gate_abs = 0.0          # chi de theo doi, khong tham gia tinh toan
+        self.gate_max = float(cfg["model"].get("recon_gate_max", 1.0))
 
     def forward(
         self,
@@ -149,7 +170,7 @@ class ImuHead(nn.Module):
             if self.gate:
                 g, d = norm.chunk(2, dim=-1)
                 self.gate_abs = float(g.detach().abs().mean())
-                norm = raw * (1.0 + g) + d
+                norm = raw * self._gain(g) + d
             if bands_out is not None:
                 bands_out[(e.group, e.level, e.band)] = norm
             v = _pad_w0_seq(norm * self.band_scale[i])    # [B, L, 4]

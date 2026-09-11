@@ -531,7 +531,7 @@ def save_figs(rows, ds, model, cfg, device, save_dir: pathlib.Path, k: int) -> N
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", default=str(pathlib.Path.home() / "Downloads" / "best20p.pt"))
+    ap.add_argument("--ckpt", default=str(pathlib.Path.home() / "Downloads" / "best21.pt"))
     ap.add_argument("--config", default=str(_ROOT / "qwt_jepa" / "configs" / "base.yaml"),
                     help="chi lay duong dan du lieu; kien truc luon theo checkpoint")
     ap.add_argument("--split", default="test", choices=["train", "valid", "test"])

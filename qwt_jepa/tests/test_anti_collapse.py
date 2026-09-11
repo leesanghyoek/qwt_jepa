@@ -214,3 +214,20 @@ def test_head_co_cong_khoi_tao_bang_phep_copy():
     img, imu = model.reconstruct(b["img_noisy"], b["imu_noisy"])
     (img.abs().mean() + imu.abs().mean()).backward()
     assert model.image_head.proj.weight.grad.norm() > 0, "khoi tao 0 nhung van phai hoc duoc"
+
+
+def test_he_so_nhan_bi_chan():
+    """gain = 1 + gate_max*tanh(g) phai nam trong [1-gate_max, 1+gate_max] va bang 1 tai g=0.
+
+    Khong chan (`1+g`) lam model phan ky: do duoc PSNR tut 25 -> 12 dB va do net len 2.4
+    (anh ra net hon ca anh sach = dang bia tan so cao).
+    """
+    cfg = _cfg()
+    model = QwtJepa(cfg)
+    gm = model.image_head.gate_max
+    if gm <= 0:
+        return
+    g = torch.linspace(-50, 50, 101)
+    gain = model.image_head._gain(g)
+    assert gain.min() >= 1 - gm - 1e-5 and gain.max() <= 1 + gm + 1e-5
+    assert abs(float(model.image_head._gain(torch.zeros(1))) - 1.0) < 1e-6

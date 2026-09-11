@@ -130,6 +130,11 @@ model:
                                   #   Huong B (uu tien anh/IMU dep): thu 4.
   recon_width: 192                # be rong decoder (chi dung khi recon_depth > 0)
   recon_heads: 6
+  recon_gate_max: 1.0             # Chan bien do he so nhan: gain = 1 + gate_max*tanh(g),
+                                  #   tuc gain nam trong [1-gate_max, 1+gate_max] = [0, 2].
+                                  #   Khong chan (`1+g`) thi model PHAN KY: do duoc PSNR tut
+                                  #   25 -> 12 dB va `net` len 2.4 (anh ra net hon ca anh
+                                  #   sach = dang bia tan so cao). 0 = khong chan.
   recon_gate: true                # Head xuat HE SO NHAN cho he so nhieu (w*(1+gate)+delta)
                                   #   thay vi chi cong. Khu nhieu wavelet la phep CO he so -
                                   #   mot phep NHAN - ma mot lop Linear khong bieu dien noi.
@@ -189,7 +194,9 @@ train:
     lr: 1.5e-4
     weight_decay: 0.05
     warmup_steps: 500
-    head_lr_mult: 10.0        # 2 recon head hoc nhanh hon phan con lai bao nhieu lan.
+    head_lr_mult: 3.0         # 2 recon head hoc nhanh hon phan con lai bao nhieu lan.
+                              #   10.0 lam head PHAN KY (L_img train 0.044 -> 0.25 sau
+                              #   3 epoch). 1.0 thi head khong kip hoc gi. 3.0 la muc giua.
                               #   Head khoi tao BANG 0 (recon_gate) nen phai bo len tu
                               #   con so khong, trong khi phan con lai chi can tinh chinh.
                               #   Voi cung lr va 300 buoc/epoch, sau 7 epoch head van
