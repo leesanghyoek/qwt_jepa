@@ -603,7 +603,49 @@ limit_train_batches nen doi so GPU se lam lech lich LR/EMA. Checkpoint co luu
 
 
 ================================================================================
- C5. CAU HINH "B THUAN" - khi san pham la ANH/IMU dep, khong phai bieu dien
+ C5b. HAI GIAI DOAN - cach DUNG DUNG JEPA cho bai toan nay
+================================================================================
+Ghep JEPA va tai tao CUNG LUC that bai vi hai muc tieu doi nghich: JEPA co tinh VUT
+chi tiet vun (do la muc dich cua no), con tai tao can GIU tung pixel. Do duoc:
+L_jepa tut 0.55 -> 0.005 trong khi L_img TANG 0.044 -> 0.126, kem theo encoder bi
+giat (ctx dao dong 0.37-1.08) nen head khong bam kip.
+
+Cong thuc chuan cua moi phuong phap tu giam sat (MAE, DINO, I-JEPA) la TIEN HUAN
+LUYEN roi TINH CHINH, khong phai chay song song.
+
+--- GIAI DOAN 1: tien huan luyen JEPA (Cell B2) ---
+    base["train"]["loss"]["lambda_img"] = 0.0
+    base["train"]["loss"]["lambda_imu"] = 0.0
+    # lambda_jepa 1.0, lambda_var 1.0 giu nguyen
+    base["train"]["early_stop"] = {"metric": "L_jepa", "mode": "min",
+                                   "patience": 12, "min_delta": 0.001}
+Chay B4 binh thuong, --out /kaggle/working/runs/gd1
+Theo doi: z_std giu 0.7-1.1, va ti so L_jepa/pos xuong duoi 1.0 (cang thap cang tot).
+
+--- GIAI DOAN 2: tinh chinh phuc hoi ---
+    base["train"]["loss"]["lambda_jepa"] = 0.0
+    base["train"]["loss"]["lambda_var"]  = 0.0
+    base["train"]["loss"]["lambda_img"]  = 1.0
+    base["train"]["loss"]["lambda_imu"]  = 1.0
+    base["train"]["early_stop"] = {"metric": "psnr", "mode": "max",
+                                   "patience": 12, "min_delta": 0.05}
+Chay B4 voi THEM hai co:
+    --resume /kaggle/working/runs/gd1/last.pt  --freeze-backbone 1
+Chi 2 recon head con hoc (1.77M/25.60M). Bieu dien DUNG YEN -> head co muc tieu co
+dinh de bam. Nhanh hon ~2x vi khong backward qua encoder.
+
+--- THI NGHIEM DE TRA LOI CAU HOI CUA DE TAI ---
+Chay GIAI DOAN 2 HAI lan, cung moi thu tru diem xuat phat:
+    (a) --resume runs/gd1/last.pt --freeze-backbone 1    <- co tien huan luyen JEPA
+    (b) KHONG --resume, --freeze-backbone 0              <- train tu dau
+So PSNR / net / RMSE. Do chinh la "tien huan luyen QWT-JEPA co giup phuc hoi khong".
+LUU Y trung thuc: nhieu o day la TU SINH nen co vo han cap (sach, hong) = vo han
+nhan. Tu giam sat co loi nhat khi nhan KHAN HIEM. Nen ket qua (b) ngang (a) la hoan
+toan co the, va do van la mot ket qua HOP LE dang bao cao.
+
+
+================================================================================
+ C5. CAU HINH "B THUAN" - nhanh doi chung (train tu dau, khong JEPA)
 ================================================================================
 Trieu chung dan den muc nay: L_img tren TRAIN tang don dieu ngay tu buoc 1
 (0.044 -> 0.058 -> 0.084 -> 0.126), PSNR tut duoi moc copy, `net` vuot 1.0.

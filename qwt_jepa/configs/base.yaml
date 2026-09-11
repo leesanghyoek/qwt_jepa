@@ -178,6 +178,12 @@ train:
   num_workers: 4
   limit_train_batches: 300    # 0 = full (~2600 batch/epoch). 500 * bs8 = 4000 sample/epoch
   limit_val_batches: 100      # 0 = full. Cat ngan eval cho nhanh
+  freeze_backbone: 0          # GIAI DOAN 2: dong bang tokenizer+encoder+predictor, chi hoc
+                              #   2 recon head. Dung SAU khi da tien huan luyen JEPA:
+                              #     GD1  lambda_jepa 1, lambda_img 0, lambda_imu 0
+                              #     GD2  --resume GD1, lambda_jepa 0, freeze_backbone 1
+                              #   Ghep hai muc tieu CUNG LUC that bai vi chung doi nghich:
+                              #   JEPA co tinh vut chi tiet vun, tai tao can giu tung pixel.
   eval_mask_seed: 1234        # seed mask khi eval; co dinh de cac epoch so sanh duoc voi nhau
   early_stop:
     metric: psnr              # L_jepa | psnr | sharp | rmse_acc | rmse_gyro (key val metrics)

@@ -70,6 +70,9 @@ def main() -> None:
     ap.add_argument("--config", default=str(_ROOT / "qwt_jepa" / "configs" / "base.yaml"))
     ap.add_argument("--out", default=str(_ROOT / "qwt_jepa" / "runs" / "base"))
     ap.add_argument("--resume", default="")
+    ap.add_argument("--freeze-backbone", type=int, default=-1,
+                    help="GIAI DOAN 2: dong bang tokenizer+encoder+predictor, chi hoc 2 "
+                         "recon head. -1 = dung train.freeze_backbone trong config.")
     ap.add_argument("--epochs", type=int, default=0)
     ap.add_argument("--batch-size", type=int, default=0, help="batch MOI GPU")
     ap.add_argument("--num-workers", type=int, default=-1)
@@ -178,6 +181,13 @@ def main() -> None:
             f"lon nhat {hi} {scales[hi]:.4f} | ti le {scales[hi]/scales[lo]:.0f}x")
     else:
         log("band_norm: OFF")
+
+    fb = args.freeze_backbone if args.freeze_backbone >= 0 else int(
+        cfg["train"].get("freeze_backbone", 0))
+    if fb:
+        n_fz = core.freeze_backbone()
+        n_tr = sum(p.numel() for p in core.parameters() if p.requires_grad)
+        log(f"freeze_backbone: ON  ({n_fz} tensor dong bang, con {n_tr/1e6:.2f}M hoc)")
 
     optimizer, _mult, _nh = build_optimizer(core, cfg)
     if _mult != 1.0:

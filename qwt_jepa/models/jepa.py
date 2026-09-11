@@ -79,6 +79,30 @@ class QwtJepa(nn.Module):
             self.missing_token.requires_grad_(False)
 
     # ------------------------------------------------------------------ #
+    @torch.no_grad()
+    def freeze_backbone(self) -> int:
+        """GIAI DOAN 2: dong bang tokenizer + context_encoder + predictor.
+
+        Chi con 2 recon head duoc hoc. Dung sau khi da tien huan luyen bang JEPA.
+
+        Vi sao can: ghep JEPA va tai tao CUNG LUC that bai vi hai muc tieu doi nghich -
+        JEPA co tinh VUT chi tiet vun (do la muc dich cua no) con tai tao can GIU tung
+        pixel. Do duoc: L_jepa tut 0.55 -> 0.005 trong khi L_img TANG 0.044 -> 0.126,
+        kem theo encoder bi giat (ctx dao dong 0.37-1.08). Head khong the hoc mot anh
+        xa tu bieu dien lien tuc bien dang.
+        Dong bang lam bieu dien DUNG YEN -> head co muc tieu co dinh de bam.
+
+        Tra ve so tensor bi dong bang.
+        """
+        n = 0
+        for mod in (self.tokenizer, self.context_encoder, self.predictor):
+            for p in mod.parameters():
+                if p.requires_grad:
+                    p.requires_grad_(False)
+                    n += 1
+        self.missing_token.requires_grad_(False)
+        return n
+
     def _encode_full(self, tok: torch.Tensor) -> torch.Tensor:
         """Duong TAI TAO: toan bo token -> encoder -> (decoder neu bat)."""
         emb = self.context_encoder(tok)

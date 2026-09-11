@@ -231,3 +231,33 @@ def test_he_so_nhan_bi_chan():
     gain = model.image_head._gain(g)
     assert gain.min() >= 1 - gm - 1e-5 and gain.max() <= 1 + gm + 1e-5
     assert abs(float(model.image_head._gain(torch.zeros(1))) - 1.0) < 1e-6
+
+
+def test_freeze_backbone_chi_con_head_hoc():
+    """GIAI DOAN 2: dong bang tokenizer+encoder+predictor, chi 2 recon head con hoc."""
+    cfg = _cfg()
+    model = QwtJepa(cfg)
+    before = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    model.freeze_backbone()
+    after = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    assert after < before
+
+    con_hoc = {n.split(".")[0] for n, p in model.named_parameters() if p.requires_grad}
+    assert con_hoc <= {"image_head", "imu_head", "recon_in", "recon_dec", "recon_out"}, con_hoc
+    for mod in (model.tokenizer, model.context_encoder, model.predictor):
+        assert not any(p.requires_grad for p in mod.parameters())
+
+    # bieu dien phai DUNG YEN: cung dau vao -> cung dau ra sau khi cap nhat head
+    model.eval()
+    b = _batch(cfg, b=2)
+    with torch.no_grad():
+        q_img, q_imu = model._qwt_all(b["img_noisy"], b["imu_noisy"])
+        z1 = model.context_encoder(model.tokenizer(q_img, q_imu)).clone()
+    opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=1e-2)
+    img, imu = model.reconstruct(b["img_noisy"], b["imu_noisy"])
+    (img.abs().mean() + imu.abs().mean()).backward()
+    opt.step()
+    with torch.no_grad():
+        q_img, q_imu = model._qwt_all(b["img_noisy"], b["imu_noisy"])
+        z2 = model.context_encoder(model.tokenizer(q_img, q_imu))
+    assert torch.allclose(z1, z2), "encoder da dong bang thi bieu dien khong duoc doi"
