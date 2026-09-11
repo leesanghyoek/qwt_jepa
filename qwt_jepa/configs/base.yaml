@@ -153,7 +153,10 @@ train:
   limit_val_batches: 100      # 0 = full. Cat ngan eval cho nhanh
   eval_mask_seed: 1234        # seed mask khi eval; co dinh de cac epoch so sanh duoc voi nhau
   early_stop:
-    metric: psnr              # L_jepa | psnr | rmse_acc | rmse_gyro (key trong val metrics)
+    metric: psnr              # L_jepa | psnr | sharp | rmse_acc | rmse_gyro (key val metrics)
+                              #   `sharp` = do net cua anh ra / do net anh sach (1.0 = bang
+                              #   anh sach). PSNR va do net DOI NGHICH nhau, nen neu muc tieu
+                              #   cua ban la ANH NET thi dung metric: sharp, mode: max.
                               #   KHONG dung L_jepa: no co the ve 0 bang representation
                               #   collapse, luc do best.pt se luu dung checkpoint hong.
     mode: max                 # min cho loss/rmse, max cho psnr

@@ -44,7 +44,7 @@ from qwt_jepa.data.dataset import PairedNoisyCleanDataset, jepa_collate   # noqa
 from qwt_jepa.data.normalize import ImuNormalizer                        # noqa: E402
 from qwt_jepa.models.jepa import QwtJepa                                  # noqa: E402
 from qwt_jepa.train import ema_momentum                                   # noqa: E402
-from qwt_jepa.train.losses import total_loss                             # noqa: E402
+from qwt_jepa.train.losses import sharpness, total_loss                             # noqa: E402
 from qwt_jepa.train.engine import _loss_kwargs, make_scaler              # noqa: E402
 from qwt_jepa.train.train import _improved, build_scheduler             # noqa: E402
 
@@ -259,7 +259,7 @@ def main() -> None:
         # PSNR la TRUNG BINH dB THEO BATCH (khong phai dB cua MSE gop) - moc PSNR trong
         # LOG_TRAIN_GIAI_THICH.md deu do bang dinh nghia nay.
         # [sum L_jepa*b, L_jepa_pos*b, zctx_std*b, psnr*b, rmse_acc*b, rmse_gyro*b, n]
-        acc = torch.zeros(7, dtype=torch.float64, device=device)
+        acc = torch.zeros(8, dtype=torch.float64, device=device)
         for bi, batch in enumerate(val_loader):
             if lim_val_rank and bi >= lim_val_rank:
                 break
@@ -278,6 +278,10 @@ def main() -> None:
             )).item()
             acc[0] += logs["L_jepa"] * b
             acc[1] += logs["L_jepa_pos"] * b
+            # DO NET tuong doi so voi anh sach (1.0 = net bang anh sach). PSNR va do net
+            # DOI NGHICH nhau nen phai nhin ca hai.
+            sc = sharpness(batch["img_clean"].float())
+            acc[7] += (sharpness(out["img_rec"].float()) / sc.clamp_min(1e-8)).double() * b
             acc[2] += logs["zctx_std"] * b
             acc[3] += psnr * b
             acc[4] += rmse_acc * b
@@ -290,6 +294,7 @@ def main() -> None:
             "L_jepa": acc[0].item() / n,
             "L_jepa_pos": acc[1].item() / n,
             "zctx_std": acc[2].item() / n,
+            "sharp": acc[7].item() / n,
             "psnr": acc[3].item() / n,
             "rmse_acc": acc[4].item() / n,
             "rmse_gyro": acc[5].item() / n,
@@ -362,7 +367,7 @@ def main() -> None:
             print(
                 f"[eval e{epoch}] L_jepa {metrics['L_jepa']:.4f}"
                 f"/{metrics['L_jepa_pos']:.4f}pos | z_std {metrics['zctx_std']:.3f} | "
-                f"PSNR {metrics['psnr']:.2f} dB | "
+                f"PSNR {metrics['psnr']:.2f} dB | net {metrics['sharp']:.3f} | "
                 f"RMSE acc {metrics['rmse_acc']:.4f} gyro {metrics['rmse_gyro']:.4f}",
                 flush=True,
             )

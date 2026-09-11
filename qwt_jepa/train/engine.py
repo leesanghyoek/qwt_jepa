@@ -8,7 +8,7 @@ import time
 import torch
 
 from . import ema_momentum
-from .losses import total_loss
+from .losses import sharpness, total_loss
 
 
 def _to_device(batch: dict, device: torch.device) -> dict:
@@ -116,7 +116,7 @@ def evaluate(model, loader, cfg: dict, device: torch.device, max_batches: int = 
     lam_kw = _loss_kwargs(cfg)
     n = 0
     agg = {"L_jepa": 0.0, "L_jepa_pos": 0.0, "psnr": 0.0, "rmse_acc": 0.0,
-           "rmse_gyro": 0.0, "zctx_std": 0.0}
+           "rmse_gyro": 0.0, "zctx_std": 0.0, "sharp": 0.0}
 
     # Mask phai CO DINH giua cac epoch, neu khong moi epoch se do tren mot bo mask
     # khac nhau -> val metric nhieu hon ca early_stop.min_delta -> best.pt chi la
@@ -142,6 +142,11 @@ def evaluate(model, loader, cfg: dict, device: torch.device, max_batches: int = 
             torch.mean((out["imu_rec"][..., 3:6].float() - batch["imu_clean"][..., 3:6].float()) ** 2)
         ).item()
 
+        # DO NET tuong doi so voi anh sach. 1.0 = net bang anh sach.
+        # PSNR va do net DOI NGHICH nhau (danh doi perception-distortion), nen phai
+        # nhin ca hai; chi nhin PSNR se bo sot viec model dang mo di hay net len.
+        sc = float(sharpness(batch["img_clean"].float()))
+        agg["sharp"] += float(sharpness(out["img_rec"].float())) / max(sc, 1e-8) * b
         agg["L_jepa"] += logs["L_jepa"] * b
         agg["L_jepa_pos"] += logs["L_jepa_pos"] * b
         agg["zctx_std"] += logs["zctx_std"] * b

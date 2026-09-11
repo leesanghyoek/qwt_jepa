@@ -25,6 +25,13 @@ def jepa_loss(z_pred: torch.Tensor, z_tgt: torch.Tensor) -> torch.Tensor:
 
 
 @torch.no_grad()
+def sharpness(x: torch.Tensor) -> torch.Tensor:
+    """Bien do gradient trung binh - thuoc do DO NET. x: [B, C, H, W]."""
+    return ((x[:, :, 1:, :] - x[:, :, :-1, :]).abs().mean()
+            + (x[:, :, :, 1:] - x[:, :, :, :-1]).abs().mean())
+
+
+@torch.no_grad()
 def content_std(z: torch.Tensor) -> torch.Tensor:
     """Do lech chuan theo BATCH tai TUNG vi tri token, roi trung binh. z: [B, T, D].
 
