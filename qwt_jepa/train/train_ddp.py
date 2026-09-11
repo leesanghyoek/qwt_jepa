@@ -70,6 +70,12 @@ def main() -> None:
     ap.add_argument("--config", default=str(_ROOT / "qwt_jepa" / "configs" / "base.yaml"))
     ap.add_argument("--out", default=str(_ROOT / "qwt_jepa" / "runs" / "base"))
     ap.add_argument("--resume", default="")
+    ap.add_argument("--init-from", default="",
+                    help="GIAI DOAN 2: nap CHI TRONG SO tu checkpoint GD1, roi bat dau LAI "
+                         "tu epoch 0 voi optimizer/scheduler/best moi. KHAC --resume: "
+                         "--resume tiep tuc mot run bi ngat (khoi phuc ca optimizer, "
+                         "scheduler va start_epoch = epoch+1, nen neu GD1 chay 40 epoch thi "
+                         "GD2 se vao range(40,40) = KHONG TRAIN GI).")
     ap.add_argument("--freeze-backbone", type=int, default=-1,
                     help="GIAI DOAN 2: dong bang tokenizer+encoder+predictor, chi hoc 2 "
                          "recon head. -1 = dung train.freeze_backbone trong config.")
@@ -181,6 +187,14 @@ def main() -> None:
             f"lon nhat {hi} {scales[hi]:.4f} | ti le {scales[hi]/scales[lo]:.0f}x")
     else:
         log("band_norm: OFF")
+
+    if args.init_from:
+        _ck = torch.load(args.init_from, map_location=device)
+        _missing, _ = core.load_state_dict(_ck["model"], strict=False)
+        if _missing:
+            sys.exit(f"{args.init_from} khong khop model hien tai. Thieu key: {_missing[:5]}")
+        log(f"init_from {args.init_from} (epoch {_ck.get('epoch')}): nap TRONG SO, "
+            f"bat dau lai tu epoch 0")
 
     fb = args.freeze_backbone if args.freeze_backbone >= 0 else int(
         cfg["train"].get("freeze_backbone", 0))

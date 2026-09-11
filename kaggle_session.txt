@@ -630,14 +630,19 @@ Theo doi: z_std giu 0.7-1.1, va ti so L_jepa/pos xuong duoi 1.0 (cang thap cang 
     base["train"]["early_stop"] = {"metric": "psnr", "mode": "max",
                                    "patience": 12, "min_delta": 0.05}
 Chay B4 voi THEM hai co:
-    --resume /kaggle/working/runs/gd1/last.pt  --freeze-backbone 1
+    --init-from /kaggle/working/runs/gd1/last.pt  --freeze-backbone 1
+
+DUNG --resume cho viec nay. --resume la de tiep tuc mot run BI NGAT: no khoi phuc ca
+optimizer, scheduler va dat start_epoch = epoch+1. Neu GD1 chay 40 epoch thi GD2 se vao
+range(40, 40) = KHONG TRAIN GI CA, va `best` mang gia tri L_jepa trong khi metric moi la
+psnr. --init-from chi nap TRONG SO roi bat dau lai tu epoch 0 voi optimizer/scheduler moi.
 Chi 2 recon head con hoc (1.77M/25.60M). Bieu dien DUNG YEN -> head co muc tieu co
 dinh de bam. Nhanh hon ~2x vi khong backward qua encoder.
 
 --- THI NGHIEM DE TRA LOI CAU HOI CUA DE TAI ---
 Chay GIAI DOAN 2 HAI lan, cung moi thu tru diem xuat phat:
-    (a) --resume runs/gd1/last.pt --freeze-backbone 1    <- co tien huan luyen JEPA
-    (b) KHONG --resume, --freeze-backbone 0              <- train tu dau
+    (a) --init-from runs/gd1/last.pt --freeze-backbone 1   <- co tien huan luyen JEPA
+    (b) KHONG --init-from, --freeze-backbone 0             <- train tu dau
 So PSNR / net / RMSE. Do chinh la "tien huan luyen QWT-JEPA co giup phuc hoi khong".
 LUU Y trung thuc: nhieu o day la TU SINH nen co vo han cap (sach, hong) = vo han
 nhan. Tu giam sat co loi nhat khi nhan KHAN HIEM. Nen ket qua (b) ngang (a) la hoan

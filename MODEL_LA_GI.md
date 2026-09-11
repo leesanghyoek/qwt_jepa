@@ -181,7 +181,7 @@ GIAI ĐOẠN 1 — tiền huấn luyện
     → encoder học biểu diễn. Không head nào can thiệp.
 
 GIAI ĐOẠN 2 — tinh chỉnh phục hồi
-    --resume <checkpoint GĐ1>  --freeze-backbone 1
+    --init-from <checkpoint GĐ1>  --freeze-backbone 1
     lambda_jepa 0 | lambda_var 0 | lambda_img 1 | lambda_imu 1
     early_stop: psnr (max)
     → chỉ 1.77M/25.60M học. Biểu diễn ĐỨNG YÊN, head có mục tiêu cố định để bám.
@@ -207,8 +207,12 @@ Chạy giai đoạn 2 **hai lần**, mọi thứ giống nhau trừ điểm xu�
 
 | | |
 |---|---|
-| (a) | `--resume runs/gd1/last.pt --freeze-backbone 1` — có tiền huấn luyện |
-| (b) | không `--resume`, `--freeze-backbone 0` — train từ đầu |
+| (a) | `--init-from runs/gd1/last.pt --freeze-backbone 1` — có tiền huấn luyện |
+| (b) | không `--init-from`, `--freeze-backbone 0` — train từ đầu |
+
+> `--init-from` chỉ nạp **trọng số** rồi bắt đầu lại từ epoch 0. Khác `--resume` (dùng để
+> tiếp tục một run bị ngắt) — `--resume` khôi phục cả optimizer, scheduler và đặt
+> `start_epoch = epoch+1`, nên sau một GĐ1 40 epoch thì GĐ2 sẽ **không train gì cả**.
 
 So `PSNR` / `net` / `RMSE acc` / `RMSE gyro`.
 
