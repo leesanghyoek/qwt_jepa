@@ -603,6 +603,39 @@ limit_train_batches nen doi so GPU se lam lech lich LR/EMA. Checkpoint co luu
 
 
 ================================================================================
+ C5. CAU HINH "B THUAN" - khi san pham la ANH/IMU dep, khong phai bieu dien
+================================================================================
+Trieu chung dan den muc nay: L_img tren TRAIN tang don dieu ngay tu buoc 1
+(0.044 -> 0.058 -> 0.084 -> 0.126), PSNR tut duoi moc copy, `net` vuot 1.0.
+Kem theo do la encoder bi giat manh: `var` vot len 0.63 va `ctx` tut xuong 0.367
+roi hoi lai, dao dong 0.37-1.08 suot.
+
+Chan doan: encoder DUNG CHUNG dang bi L_jepa + L_var quang quat, con recon head
+phai hoc mot anh xa tu bieu dien lien tuc bien dang -> khong bam kip. Va L_img chi
+chiem ~10% tong loss nen no khong co tieng noi gi trong viec encoder di dau.
+
+Them vao Cell B2 (truoc khi ghi kaggle.yaml):
+
+    base["train"]["loss"]["lambda_jepa"] = 0.0    # bo han muc tieu JEPA
+    base["train"]["loss"]["lambda_var"]  = 0.0    # bo luon rang buoc chong collapse
+
+Vi sao bo duoc lambda_var: no ton tai de chan collapse cua JEPA. Khi lambda_jepa = 0
+thi khong con gi de collapse - va hai loss tai tao tu no da chan collapse (khong the
+dung lai anh tu mot hang so).
+
+DU DOAN de kiem chung (day la phep thu CO THE SAI, khong phai loi hua):
+    dung  -> L_img tren train GIAM deu, PSNR leo qua moc 25.45 dB, `net` tien ve 1.0
+             ma khong vuot
+    sai   -> L_img van tang => van de nam trong chinh recon head, khong phai o encoder
+
+CHUA doi lambda_img cung luc. Doi mot thu moi biet thu do co tac dung khong.
+Neu dung va PSNR len nhung con cham, luc do moi tang lambda_img len 3-5.
+
+LUU Y: cau hinh nay VUT BO bieu dien JEPA. Checkpoint ra khong dung duoc cho
+downstream (pose probe, VIO). Chi chon neu san pham cuoi cung dung la anh + IMU.
+
+
+================================================================================
  D. GHI CHU
 ================================================================================
 - Quota GPU Kaggle: ~30h/tuan, moi phien toi da 12h. Notebook A khong dung GPU.
