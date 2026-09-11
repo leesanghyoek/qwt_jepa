@@ -142,9 +142,9 @@ masking:
 
 train:
   epochs: 40                  # tran cung; early_stop thuong dung truoc muc nay
-  batch_size: 8
+  batch_size: 16
   num_workers: 4
-  limit_train_batches: 500    # 0 = full (~2600 batch/epoch). 500 * bs8 = 4000 sample/epoch
+  limit_train_batches: 300    # 0 = full (~2600 batch/epoch). 500 * bs8 = 4000 sample/epoch
   limit_val_batches: 100      # 0 = full. Cat ngan eval cho nhanh
   eval_mask_seed: 1234        # seed mask khi eval; co dinh de cac epoch so sanh duoc voi nhau
   early_stop:
