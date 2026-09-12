@@ -94,6 +94,7 @@ class ImageHead(_GatedHead):
         # Doi xung voi Tokenizer: head du doan he so DA CHUAN HOA roi nhan lai scale.
         self.register_buffer("band_scale", torch.ones(len(layout.image_entries)))
         self.gate_abs = 0.0          # chi de theo doi, khong tham gia tinh toan
+        self.delta_abs = 0.0         # nhanh CONG - khong bi tanh chan, phai theo doi rieng
         self.gate_max = float(cfg["model"].get("recon_gate_max", 1.0))
 
     def forward(
@@ -121,6 +122,7 @@ class ImageHead(_GatedHead):
                 # (dau ra = anh vao). Neu sau nhieu epoch gate VAN ~0 thi head chua
                 # roi diem xuat phat - la van de toc do hoc, khong phai hoc sai.
                 self.gate_abs = float(g.detach().abs().mean())
+                self.delta_abs = float(d.detach().abs().mean())
                 norm = raw_p * self._gain(g) + d
             if bands_out is not None:
                 bands_out[(e.level, e.band)] = norm
@@ -147,6 +149,7 @@ class ImuHead(_GatedHead):
             nn.init.zeros_(self.proj.bias)
         self.register_buffer("band_scale", torch.ones(len(layout.imu_entries)))
         self.gate_abs = 0.0          # chi de theo doi, khong tham gia tinh toan
+        self.delta_abs = 0.0         # nhanh CONG - khong bi tanh chan, phai theo doi rieng
         self.gate_max = float(cfg["model"].get("recon_gate_max", 1.0))
 
     def forward(
@@ -170,6 +173,7 @@ class ImuHead(_GatedHead):
             if self.gate:
                 g, d = norm.chunk(2, dim=-1)
                 self.gate_abs = float(g.detach().abs().mean())
+                self.delta_abs = float(d.detach().abs().mean())
                 norm = raw * self._gain(g) + d
             if bands_out is not None:
                 bands_out[(e.group, e.level, e.band)] = norm

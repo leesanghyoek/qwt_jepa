@@ -255,6 +255,9 @@ class QwtJepa(nn.Module):
             "imu_bands_tgt": imu_bands_tgt,
             # bien do gate cua image_head - 0 nghia la head chua roi khoi khoi tao
             "gate_abs": getattr(self.image_head, "gate_abs", 0.0),
+            # bien do nhanh CONG. gain da bi tanh chan trong [0,2] nhung delta thi
+            # KHONG - no la duong duy nhat con lai de head lam hong dau ra.
+            "delta_abs": getattr(self.image_head, "delta_abs", 0.0),
             "mask": mask,
         }
 

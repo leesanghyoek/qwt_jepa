@@ -639,6 +639,20 @@ psnr. --init-from chi nap TRONG SO roi bat dau lai tu epoch 0 voi optimizer/sche
 Chi 2 recon head con hoc (1.77M/25.60M). Bieu dien DUNG YEN -> head co muc tieu co
 dinh de bam. Nhanh hon ~2x vi khong backward qua encoder.
 
+--- CHAN DOAN GD2 KHI PSNR TUT / net VUOT 1.0 ---
+Doc cot `gate` va `delta` (bien do hai nhanh cua head) de biet nhanh nao gay ra:
+
+    norm = raw * (1 + gate_max*tanh(g))  +  delta
+           └──── bi tanh CHAN trong [0,2] ────┘     └─ KHONG bi chan ─┘
+
+  gate lon (>0.3) va net > 1.1   -> nhanh NHAN qua da  -> ha model.recon_gate_max 0.5
+  gate nho (<0.1) ma PSNR van tut -> nhanh CONG phan ky -> ha optimizer.head_lr_mult
+  ca hai ~0 sau 3 epoch           -> head chua hoc      -> tang head_lr_mult
+
+Do that lan dau chay GD2 (head_lr_mult 3.0): gate chi 0.04-0.06 (gain ~1.05, gan nhu
+dong nhat) nhung PSNR tut 24.70 -> 18.17 va net len 1.321. Ket luan: KHONG phai nhanh
+nhan, ma la delta phan ky. Ha head_lr_mult xuong 1.0.
+
 --- THI NGHIEM DE TRA LOI CAU HOI CUA DE TAI ---
 Chay GIAI DOAN 2 HAI lan, cung moi thu tru diem xuat phat:
     (a) --init-from runs/gd1/last.pt --freeze-backbone 1   <- co tien huan luyen JEPA

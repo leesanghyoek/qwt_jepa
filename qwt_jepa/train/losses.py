@@ -140,6 +140,7 @@ def total_loss(
         "L_imu": float(l_imu.detach()),
         "L_band": float(l_band.detach()),
         "gate": float(out.get("gate_abs", 0.0)),
+        "delta": float(out.get("delta_abs", 0.0)),
         "L_var": float(l_var.detach()),
         # std THEO NOI DUNG (doi anh), khong phai std gop ca (batch, token)
         "ztgt_std": float(content_std(out["z_tgt"])),
